@@ -7,10 +7,12 @@ add_definitions("-g -pipe -W -Wall -fPIC -std=gnu++14 -DWEBRTC_POSIX -DWEBRTC_LI
 include_directories(
     "./src"
     "./third_party/include"
+    "../rtcbase/src"
 )
 
 link_directories(
     "./third_party/lib"
+    "../rtcbase/out"
 )
 
 file (GLOB all_src
@@ -22,6 +24,13 @@ add_executable(xrtc-server ${all_src})
 
 target_link_libraries(xrtc-server
     libyaml-cpp.a
+    librtcbase.a
+
+    libabsl_strings.a
+    libabsl_throw_delegate.a
+    libabsl_base.a
+
     -lpthread
+    -no-pie
 )
 
