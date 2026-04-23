@@ -19,7 +19,10 @@ EventLoop::EventLoop(void* owner) :
 }
 
 EventLoop::~EventLoop() {
-
+    if (_loop) {
+        ev_loop_destroy(_loop);
+        _loop = nullptr;
+    }
 }
 
 void EventLoop::start() {

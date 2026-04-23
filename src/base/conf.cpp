@@ -15,9 +15,9 @@ int load_general_conf(const char *filename, GeneralConf* conf) {
     conf->log_level = "info";
     conf->log_to_stderr = false;
 
-    YAML::Node config = YAML::LoadFile(filename);
-
     try {
+        YAML::Node config = YAML::LoadFile(filename);
+
         conf->log_dir = config["log"]["log_dir"].as<std::string>();
         conf->log_name = config["log"]["log_name"].as<std::string>();
         conf->log_level = config["log"]["log_level"].as<std::string>();
@@ -29,6 +29,9 @@ int load_general_conf(const char *filename, GeneralConf* conf) {
     } catch (YAML::Exception &e) {
         fprintf(stderr, "catch a YAML::Exception, line: %d, colum: %d, err: %s\n",
             e.mark.line, e.mark.column, e.msg.c_str());
+        return -1;
+    } catch (std::exception &e) {
+        fprintf(stderr, "catch a std::exception, err: %s\n", e.what());
         return -1;
     }
 

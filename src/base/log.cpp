@@ -152,7 +152,7 @@ void XrtcLog::write_log_to_log_file(std::ofstream& log_file,
     }
 
     while (!tmp.empty()) {
-        log_file << tmp.front();
+        log_file << tmp.front() << std::endl;
         tmp.pop();
     }
     log_file.flush();
