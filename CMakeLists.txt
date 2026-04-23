@@ -25,6 +25,7 @@ add_executable(xrtc-server ${all_src})
 target_link_libraries(xrtc-server
     libyaml-cpp.a
     librtcbase.a
+    libev.a
 
     libabsl_strings.a
     libabsl_throw_delegate.a
