@@ -177,7 +177,19 @@ void SignalingServer::_stop() {
 }
 
 void SignalingServer::_dispatch_new_conn(int fd) {
+    // 以轮询方式分配fd到worker上
+    size_t index = _next_worker_index;
+    _next_worker_index++;
+    if (_next_worker_index >= _workers.size()) {
+        _next_worker_index = 0;
+    }
 
+    if (_workers.empty()) {
+        return;
+    }
+
+    SignalingWorker* worker = _workers[index];
+    worker->notify_new_conn(fd);
 }
 
 int SignalingServer::_create_worker(int worker_id) {
