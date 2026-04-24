@@ -30,6 +30,7 @@ link_directories(
 file (GLOB all_src
     "./src/*.cpp"
     "./src/base/*.cpp"
+    "./src/server/*.cpp"
 )
 
 # ============================================================
@@ -61,6 +62,7 @@ include(FetchContent)
 FetchContent_Declare(
     googletest
     URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 
 # 设置Google Test的编译选项（不编译不必要的部分）
