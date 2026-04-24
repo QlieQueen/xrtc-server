@@ -1,12 +1,15 @@
 #ifndef __SERVER_SIGNALING_SERVER_H_
 #define __SERVER_SIGNALING_SERVER_H_
 
+#include <vector>
 #include <thread>
 #include <string>
 
 #include "base/event_loop.h"
 
 namespace xrtc {
+
+class SignalingWorker;
 
 struct SignalingServerOptions {
     std::string    host = "127.0.0.1";
@@ -39,6 +42,7 @@ private:
     void _process_notify(int msg);
     void _stop();
     void _dispatch_new_conn(int fd);
+    int _create_worker(int index);
 
 private:
     SignalingServerOptions _options;
@@ -50,6 +54,8 @@ private:
     std::thread* _thread = nullptr;
 
     int _listen_fd = -1;
+    std::vector<SignalingWorker*> _workers;
+    size_t _next_worker_index = 0;
 };
 
 } // namespace xrtc

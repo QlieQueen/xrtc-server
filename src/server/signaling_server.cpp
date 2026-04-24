@@ -7,6 +7,7 @@
 #include <rtc_base/logging.h>
 
 #include "base/socket.h"
+#include "server/signaling_worker.h"
 
 namespace xrtc {
 
@@ -25,7 +26,7 @@ void signaling_server_recv_nofify(EventLoop* /*el*/, IOWatcher* /*w*/, int fd, i
 }
 
 void accept_new_connect(EventLoop* /*el*/, IOWatcher* /*w*/,
-    int fd, int events, void* data)
+    int fd, int /*events*/, void* data)
 {
     int conn_fd;
     char conn_ip[128];
@@ -60,6 +61,13 @@ SignalingServer::~SignalingServer() {
     }
 
     // TODO: delete workers
+    for (auto worker : _workers) {
+        if (worker) {
+            delete worker;
+        }
+    }
+
+    _workers.clear();
 }
 
 int SignalingServer::init(const char* conf_file) {
@@ -104,7 +112,7 @@ int SignalingServer::init(const char* conf_file) {
 
     // TODO: 创建worker
     for (int i = 0; i < _options.worker_num; i++) {
-
+        _create_worker(i);
     }
 
     return 0;
@@ -170,6 +178,26 @@ void SignalingServer::_stop() {
 
 void SignalingServer::_dispatch_new_conn(int fd) {
 
+}
+
+int SignalingServer::_create_worker(int worker_id) {
+    RTC_LOG(LS_INFO) << "signaling server create worker, worker_id: " << worker_id;
+
+    SignalingWorker* worker = new SignalingWorker(worker_id, _options);
+
+    if (worker->init() != 0) {
+        RTC_LOG(LS_WARNING) << "[SignalingServer::_create_worker] worker init failed, worker_id: " << worker_id;
+        return -1;
+    }
+
+    if (!worker->start()) {
+        RTC_LOG(LS_WARNING) << "[SignalingServer::_create_worker] worker start failed, worker_id: " << worker_id;
+        return -1;
+    }
+
+    _workers.push_back(worker);
+
+    return 0;
 }
 
 
