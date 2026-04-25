@@ -98,6 +98,30 @@ int tcp_accept(int sock, char* host, int* port) {
     return fd;
 }
 
+int tcp_connect(const char* addr, int port) {
+    // 1. 创建socket
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock == -1) {
+        RTC_LOG(LS_WARNING) << "create socket error, errno: " << errno 
+        << ", errmsg: " << strerror(errno);
+        return -1;
+    }
+
+    struct sockaddr_in dst;
+    memset(&dst, 0, sizeof(dst));
+    dst.sin_family = AF_INET;
+    inet_aton(addr, &dst.sin_addr);
+    dst.sin_port = htons(port);
+    if (-1 == connect(sock, (const sockaddr*)&dst, sizeof(dst))) {
+        RTC_LOG(LS_WARNING) << "connect to: " << addr
+                            << ", port: " << port
+                            << " failed. errmsg: " << strerror(errno);
+        return -1;
+    }
+
+    return 0;
+}
+
 
 
 } // namespace xrtc

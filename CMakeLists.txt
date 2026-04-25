@@ -81,7 +81,10 @@ FetchContent_MakeAvailable(googletest)
 # ============================================================
 file (GLOB test_src
     "./test/*.cpp"
+    "./test/base/*.cpp"
     "./src/base/*.cpp"
+    "./test/server/*.cpp"
+    "./src/server/*.cpp"
 )
 
 # ============================================================

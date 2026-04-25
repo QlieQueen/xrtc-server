@@ -32,7 +32,7 @@ void accept_new_connect(EventLoop* /*el*/, IOWatcher* /*w*/,
     char conn_ip[128];
     int conn_port;
 
-    conn_fd = tcp_accept(conn_fd, conn_ip, &conn_port);
+    conn_fd = tcp_accept(fd, conn_ip, &conn_port);
     if (-1 == conn_fd) {
         return;
     }
