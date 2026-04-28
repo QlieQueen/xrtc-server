@@ -9,7 +9,10 @@
 #include "xrtc_server_def.h"
 #include "base/socket.h"
 #include "base/event_loop.h"
+#include "server/rtc_server.h"
 #include "server/tcp_connection.h"
+
+extern xrtc::RtcServer* g_rtc_server;
 
 using json = nlohmann::json;
 
@@ -312,6 +315,8 @@ int SignalingWorker::_process_push(int cmdno, TcpConnection* c,
     msg->worker = this;
     msg->conn = c;
     msg->fd = c->fd;
+
+    g_rtc_server->send_rtc_msg(msg);
 
     return 0;
 }

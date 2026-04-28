@@ -1,11 +1,17 @@
 #include <iostream>
 #include <thread>
 
-#include "base/conf.h"
-#include "base/log.h"
+#include <signal.h>
 
-xrtc::GeneralConf* g_conf = nullptr;
-xrtc::XrtcLog* g_log = nullptr;
+#include "base/log.h"
+#include "base/conf.h"
+#include "server/rtc_server.h"
+#include "server/signaling_server.h"
+
+extern xrtc::GeneralConf* g_conf;
+extern xrtc::XrtcLog* g_log;
+extern xrtc::SignalingServer* g_signaling_server;
+extern xrtc::RtcServer* g_rtc_server;
 
 int init_general_conf(const char* filename) {
     if (!filename) {
@@ -41,6 +47,50 @@ int init_log(const std::string& log_dir,
     return 0;
 }
 
+int init_signaling_server() {
+    g_signaling_server = new xrtc::SignalingServer();
+
+    if (-1 == g_signaling_server->init("./conf/signaling_server.yaml")) {
+        RTC_LOG(LS_WARNING) << "[init_signaling_server] signaling server init failed";
+        return -1;
+    }
+
+    g_signaling_server->start();    
+
+    return 0;
+}
+
+int init_rtc_server() {
+    g_rtc_server = new xrtc::RtcServer();
+
+    if (-1 == g_rtc_server->init("./conf/rtc_server.yaml")) {
+        RTC_LOG(LS_WARNING) << "[init_rtc_server] rtc server init failed";
+        return -1;
+    }
+
+    g_rtc_server->start();
+
+
+    return 0;
+}
+
+void signal_process(int sig) {
+    switch (sig) {
+        case SIGINT:
+        case SIGTERM:
+            if (g_signaling_server) {
+                g_signaling_server->stop();
+            }
+            
+            if (g_rtc_server) {
+                g_rtc_server->stop();
+            }
+            break;
+
+        default:
+            break;
+    }
+}
 
 int main() {
 
@@ -52,12 +102,20 @@ int main() {
         return -1;
     }
 
-    RTC_LOG(LS_INFO) << "hello world!";
-    RTC_LOG(LS_WARNING) << "hello world!";
+    if (init_signaling_server() != 0) {
+        return -1;
+    }
 
-    // 等待日志写入
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    
+    if (init_rtc_server() != 0) {
+        return -1;
+    }
+
+    signal(SIGINT, signal_process);
+
+    g_signaling_server->join();
+
+    g_rtc_server->join();
+
     // 停止日志系统
     if (g_log) {
         g_log->stop();

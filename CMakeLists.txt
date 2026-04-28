@@ -80,6 +80,7 @@ FetchContent_MakeAvailable(googletest)
 # 测试源文件（包含基础模块源码，以便测试目标可以链接）
 # ============================================================
 file (GLOB test_src
+    "./src/global.cpp"
     "./test/*.cpp"
     "./test/base/*.cpp"
     "./src/base/*.cpp"
