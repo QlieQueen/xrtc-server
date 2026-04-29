@@ -60,6 +60,23 @@ SignalingWorker::SignalingWorker(int worker_id, SignalingServerOptions options) 
 }
 
 SignalingWorker::~SignalingWorker() {
+    for (auto c : _tcp_conns) {
+        if (c) {
+            _close_conn(c);
+        }
+    }
+
+    _tcp_conns.clear();
+
+    if (_el) {
+        delete _el;
+        _el = nullptr;
+    }
+
+    if (_thread) {
+        delete _thread;
+        _thread = nullptr;
+    }
 
 }
 
@@ -117,7 +134,7 @@ int SignalingWorker::notify_new_conn(int fd) {
 void SignalingWorker::_process_notify(int msg) {
     switch (msg) {
         case SignalingWorker::QUIT:
-            _el->stop();
+            _stop();
             break;
 
         case SignalingWorker::NEW_CONN:
@@ -128,6 +145,19 @@ void SignalingWorker::_process_notify(int msg) {
             _new_conn(fd);
             break;
     }
+}
+
+void SignalingWorker::_stop() {
+    if (!_thread) {
+        RTC_LOG(LS_WARNING) << "signaling worker not running, worker_id: " << _worker_id;
+        return;
+    }
+
+    _el->delete_io_event(_pipe_watcher);
+    _el->stop();
+
+    close(_notify_recv_fd);
+    close(_notify_send_fd);
 }
 
 void SignalingWorker::_new_conn(int fd) {

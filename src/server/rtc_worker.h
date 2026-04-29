@@ -1,6 +1,7 @@
 #ifndef __SERVER_RTC_WORKER_H_
 #define __SERVER_RTC_WORKER_H_
 
+#include "base/lock_free_queue.h"
 #include "server/rtc_server.h"
 
 namespace xrtc {
@@ -12,24 +13,40 @@ public:
         RTC_MSG = 1
     };
 
-    RtcWorker(int worker_id, const RtcServerOptions& options) {}
+    RtcWorker(int worker_id, const RtcServerOptions& options);
+    ~RtcWorker();
+    int init();
+    bool start();
+    void stop();
+    int notify(int msg);
+    void join();
+    void push_msg(std::shared_ptr<RtcMsg> msg);
+    bool pop_msg(std::shared_ptr<RtcMsg>* msg);
+    int send_rtc_msg(std::shared_ptr<RtcMsg> msg);
 
-    int init() {
-        return 0;        
-    }
+    friend void rtc_worker_recv_notify(EventLoop* el, IOWatcher* w, int fd, int events, void* data);
 
-    bool start() {
-        return true;
-    }
+private:
+    void _process_notify(int msg);
+    void _stop();
+    void _process_rtc_msg();
+    void _process_push(std::shared_ptr<RtcMsg>& msg);
+    void _process_pull(std::shared_ptr<RtcMsg>& msg);
+    void _process_stop_push(std::shared_ptr<RtcMsg>& msg);
+    void _process_stop_pull(std::shared_ptr<RtcMsg>& msg);
+    void _process_answer(std::shared_ptr<RtcMsg>& msg);
 
-    void stop() {
+private:
+    int _worker_id;
+    RtcServerOptions _options;
+    EventLoop* _el;
 
-    }
+    IOWatcher* _pipe_watcher = nullptr;
+    int _notify_recv_fd = -1;
+    int _notify_send_fd = -1;
 
-    void join() {
-        
-    }
-
+    std::thread* _thread = nullptr;
+    LockFreeQueue<std::shared_ptr<RtcMsg>> _q_msg;
 };
 
 }

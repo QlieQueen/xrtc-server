@@ -36,6 +36,7 @@ public:
 
 private:
     void _process_notify(int msg);
+    void _stop();
     void _new_conn(int fd);
     void _close_conn(TcpConnection* c);
     void _remove_conn(TcpConnection* c);
