@@ -1,10 +1,13 @@
 #ifndef __SERVER_SIGNALING_WORKER_H_
 #define __SERVER_SIGNALING_WORKER_H_
 
+#include <queue>
 #include <vector>
+#include <mutex>
 
 #include <rtc_base/slice.h>
 
+#include "xrtc_server_def.h"
 #include "base/json.hpp"
 #include "base/lock_free_queue.h"
 #include "server/signaling_server.h"
@@ -19,7 +22,8 @@ class SignalingWorker {
 public:
     enum {
         QUIT = 0,
-        NEW_CONN = 1
+        NEW_CONN = 1,
+        RTC_MSG = 2
     };
     SignalingWorker(int worker_id, SignalingServerOptions options);
     ~SignalingWorker();
@@ -30,11 +34,16 @@ public:
     int notify(int msg);
     void join();
     int notify_new_conn(int fd);
+    void push_msg(std::shared_ptr<RtcMsg> msg);
+    std::shared_ptr<RtcMsg> pop_msg();
+    int send_rtc_msg(std::shared_ptr<RtcMsg> msg);
 
     friend void signaling_worker_recv_nofify(EventLoop* el, IOWatcher* w, int fd, int events, void* data);
     friend void conn_io_cb(EventLoop* /*el*/, IOWatcher* /*w*/, int fd, int events, void* data);
 
 private:
+    void _add_reply(TcpConnection* c, const rtc::Slice& reply);
+    void _process_rtc_msg();
     void _process_notify(int msg);
     void _stop();
     void _new_conn(int fd);
@@ -48,6 +57,15 @@ private:
         const rtc::Slice& body);
     int _process_push(int cmdno, TcpConnection* c,
         const json& root, uint32_t log_id);
+    int _process_pull(int cmdno, TcpConnection* c,
+        const json& root, uint32_t log_id);
+    int _process_stop_push(int cmdno, TcpConnection* c,
+        const json& root, uint32_t log_id);
+    int _process_stop_pull(int cmdno, TcpConnection* c,
+        const json& root, uint32_t log_id);
+    int _process_answer(int cmdno, TcpConnection* c,
+        const json& root, uint32_t log_id);
+    void _response_server_offer(std::shared_ptr<RtcMsg> msg);
 
 private:
     int _worker_id;
@@ -60,6 +78,9 @@ private:
     std::thread* _thread = nullptr;
     LockFreeQueue<int> _q_connfd;
     std::vector<TcpConnection*> _tcp_conns;
+
+    std::queue<std::shared_ptr<RtcMsg>> _q_msg;
+    std::mutex _q_msg_mtx;
 };
 
 }

@@ -3,6 +3,8 @@
 #include <unistd.h>
 #include <rtc_base/logging.h>
 
+#include "server/signaling_worker.h"
+
 namespace xrtc {
 
 //typedef void (*io_cb_t)(EventLoop* el, IOWatcher* w, int fd, int events, void*data);
@@ -21,7 +23,10 @@ void rtc_worker_recv_notify(EventLoop* el, IOWatcher* w, int fd, int events, voi
 
 
 RtcWorker::RtcWorker(int worker_id, const RtcServerOptions& options) :
-    _worker_id(worker_id), _options(options), _el(new EventLoop(this))
+    _worker_id(worker_id),
+    _options(options),
+    _el(new EventLoop(this)),
+    _rtc_stream_mgr(new RtcStreamManager(_el))
 {
 }
 
@@ -141,6 +146,23 @@ void RtcWorker::_process_rtc_msg() {
 
 void RtcWorker::_process_push(std::shared_ptr<RtcMsg>& msg) {
     RTC_LOG(LS_INFO) << "rtc worker process push request, worker_id: " << _worker_id;
+    std::string offer;
+    int ret = _rtc_stream_mgr->create_push_stream(msg->uid, msg->stream_name,
+                                        msg->audio, msg->video,
+                                        msg->log_id, nullptr, offer);
+    if (ret != 0) {
+        msg->err_no = -1;
+    }
+    
+    RTC_LOG(INFO) << "offer: " << offer;
+    
+    msg->sdp = offer;
+    
+    SignalingWorker* worker = (SignalingWorker*)msg->worker;
+    if (worker) {
+        worker->send_rtc_msg(msg);
+    }
+
 }
 
 void RtcWorker::_process_pull(std::shared_ptr<RtcMsg>& msg) {

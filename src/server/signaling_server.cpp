@@ -160,6 +160,14 @@ void SignalingServer::_process_notify(int msg) {
 }
 
 void SignalingServer::_stop() {
+    // 先停止所有 worker，无论 server 线程是否在运行
+    for (auto worker : _workers) {
+        if (worker) {
+            worker->stop();
+            worker->join();
+        }
+    }
+
     if (!_thread) {
         RTC_LOG(LS_WARNING) << "signaling server is not running";
         return;

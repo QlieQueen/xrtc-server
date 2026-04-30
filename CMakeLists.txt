@@ -31,6 +31,7 @@ file (GLOB all_src
     "./src/*.cpp"
     "./src/base/*.cpp"
     "./src/server/*.cpp"
+    "./src/stream/*.cpp"
 )
 
 # ============================================================
@@ -41,13 +42,14 @@ add_executable(xrtc-server ${all_src})
 target_link_libraries(xrtc-server
     libyaml-cpp.a
     librtcbase.a
-    libev.a
-
+    libssl.a
+    libcrypto.a
     libabsl_strings.a
     libabsl_throw_delegate.a
-    libabsl_base.a
-
+    libabsl_bad_optional_access.a
+    libev.a
     -lpthread
+
     -no-pie
 )
 
@@ -86,6 +88,7 @@ file (GLOB test_src
     "./src/base/*.cpp"
     "./test/server/*.cpp"
     "./src/server/*.cpp"
+    "./src/stream/*.cpp"
 )
 
 # ============================================================
@@ -99,6 +102,8 @@ target_link_libraries(xrtc-server-test
 
     libyaml-cpp.a
     librtcbase.a
+    libssl.a
+    libcrypto.a
     libev.a
 
     libabsl_strings.a
@@ -109,5 +114,6 @@ target_link_libraries(xrtc-server-test
     -no-pie
 )
 
-# 注册测试
+# 注册测试（设置工作目录为源码根目录，确保测试可找到配置文件）
 add_test(NAME xrtc-server-test COMMAND xrtc-server-test)
+set_tests_properties(xrtc-server-test PROPERTIES WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})

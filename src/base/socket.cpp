@@ -185,4 +185,20 @@ int sock_read_data(int sock, char* buf, size_t len) {
     } 
 }
 
+int sock_write_data(int sock, const char* buf, size_t len) {
+    int nwritten = write(sock, buf, len);
+    if (nwritten == -1) {
+        // tcp写缓冲区满，返回0等待下一次写事件触发
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            nwritten = 0;
+        } else { // 真正写出错的情况，返回-1
+            RTC_LOG(LS_WARNING) << "sock write failed, error: " << errno
+                << ", errmsg: " << strerror(errno) << ", fd: " << sock;
+            return -1;
+        }
+    }
+    // write返回大于等于0的情况直接返回（这里如果对端关闭，此时write会返回0）
+    return nwritten;
+}
+
 } // namespace xrtc

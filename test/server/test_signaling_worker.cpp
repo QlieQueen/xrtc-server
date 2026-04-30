@@ -26,10 +26,13 @@
 #include "base/socket.h"
 #include "base/xhead.h"
 #include "server/tcp_connection.h"
+#include "server/rtc_server.h"
 #include "xrtc_server_def.h"
 
 using namespace xrtc;
 using json = nlohmann::json;
+
+extern xrtc::RtcServer* g_rtc_server;
 
 class SignalingWorkerTest : public ::testing::Test {
 protected:
@@ -39,9 +42,19 @@ protected:
         options.worker_num = 2;
         options.connection_timeout = 5000000;
         worker = new SignalingWorker(0, options);
+
+        // 创建 RtcServer（不 init/start），避免 _process_push 调用 g_rtc_server 时 nullptr 崩溃
+        rtc_server = new RtcServer();
+        g_rtc_server = rtc_server;
     }
 
     void TearDown() override {
+        g_rtc_server = nullptr;
+        if (rtc_server) {
+            delete rtc_server;
+            rtc_server = nullptr;
+        }
+
         if (worker) {
             worker->stop();
             worker->join();
@@ -52,6 +65,7 @@ protected:
 
     SignalingServerOptions options;
     SignalingWorker* worker = nullptr;
+    RtcServer* rtc_server = nullptr;
 };
 
 // ============================================================

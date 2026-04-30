@@ -1,9 +1,11 @@
 #ifndef __SERVER_TCP_CONNECTION_H_
 #define __SERVER_TCP_CONNECTION_H_
 
+#include <list>
 #include <stdint.h>
 
 #include <rtc_base/sds.h>
+#include <rtc_base/slice.h>
 
 #include "base/xhead.h"
 
@@ -33,6 +35,8 @@ public:
     size_t bytes_processed = 0; // 标记当前处理了buf里多少个字节的数据
     int current_state = STATE_HEAD;
     unsigned long list_interaction = 0;
+    std::list<rtc::Slice> reply_list;  // 回复消息存放该链表
+    size_t cur_resp_pos = 0;
 };
 
 } // namespace xrtc

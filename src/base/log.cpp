@@ -21,6 +21,7 @@ XrtcLog::XrtcLog(const std::string& log_dir,
 }
 
 XrtcLog::~XrtcLog() {
+    rtc::LogMessage::RemoveLogToStream(this);
     stop();
 
     _out_file.close();
