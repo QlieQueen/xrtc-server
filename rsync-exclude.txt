@@ -1,0 +1,5 @@
+.git
+.claude
+CLAUDE.md
+.gitignore
+build

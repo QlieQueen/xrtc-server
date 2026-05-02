@@ -67,6 +67,11 @@ FetchContent_Declare(
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 
+FetchContent_Declare(
+    googletest
+    SOURCE_DIR /home/ydqun/workspace/lessons/myxrtc1.0/cpp/googletest-1.14.0
+)
+
 # 设置Google Test的编译选项（不编译不必要的部分）
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 set(BUILD_GMOCK OFF CACHE BOOL "" FORCE)

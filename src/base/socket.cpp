@@ -1,8 +1,8 @@
 #include "base/socket.h"
 
+#include <sys/ioctl.h>
 #include <fcntl.h>
 #include <unistd.h>
-#include <sys/socket.h>
 #include <arpa/inet.h>
 #include <netinet/tcp.h>
 
@@ -164,7 +164,7 @@ int sock_peer_to_str(int sock, char*ip, uint16_t* port) {
     int ret = getpeername(sock, (struct sockaddr*)&sa, &salen);
     if (ret == -1) {
         ip[0] = '?';
-        ip[1] = '\n';
+        ip[1] = '\0';
 
         *port = 0;
     }
@@ -183,6 +183,7 @@ int sock_read_data(int sock, char* buf, size_t len) {
             << " failed, errmsg: " << strerror(errno);
         return -1;
     } 
+    return nread;
 }
 
 int sock_write_data(int sock, const char* buf, size_t len) {
@@ -199,6 +200,110 @@ int sock_write_data(int sock, const char* buf, size_t len) {
     }
     // write返回大于等于0的情况直接返回（这里如果对端关闭，此时write会返回0）
     return nwritten;
+}
+
+int create_udp_socket(int family) {
+    int sock = socket(family, SOCK_DGRAM, 0);
+    if (sock == -1) {
+        RTC_LOG(LS_WARNING) << "create udp socket error: " << strerror(errno)
+            << ", errno: " << errno;
+        return -1;
+    }
+
+    return sock;
+}
+
+int sock_bind(int sock, struct sockaddr* addr, socklen_t len, int min_port, int max_port) {
+    int ret = -1;
+    if (0 == min_port && 0 == max_port) {
+        // 让操作系统自动选择一个port
+        ret = bind(sock, addr, len);
+    } else {
+        struct sockaddr_in* addr_in = (struct sockaddr_in*)addr;
+        for (int port = min_port; port <= max_port && ret !=0; port++) {
+            addr_in->sin_port = htons(port);
+            ret = bind(sock, addr, len);
+        }
+    }
+
+    if (ret != 0) {
+        RTC_LOG(LS_WARNING) << "bind error: " << strerror(errno)
+            << ", errno: " << errno;
+    }
+
+    return ret;
+}
+
+int sock_get_address(int sock, char* ip, int* port) {
+    struct sockaddr_in addr_in;
+    socklen_t len = sizeof(struct sockaddr);
+    int ret = getsockname(sock, (struct sockaddr*)&addr_in, &len);
+    if (ret != 0) {
+        RTC_LOG(LS_WARNING) << "getsockname error: " << strerror(errno)
+            << ", errno: " << errno;
+        return -1;
+    }
+
+    if (ip) {
+        memcpy(ip, inet_ntoa(addr_in.sin_addr), sizeof(addr_in.sin_addr));
+    }
+
+    if (port) {
+        *port = ntohs(addr_in.sin_port);
+    }
+
+    return 0;
+}
+
+int sock_recv_from(int sock, char* buf, size_t size, struct sockaddr* addr, socklen_t addr_len) {
+    int received = recvfrom(sock, buf, size, 0, addr, &addr_len);
+    if (received < 0) {
+        if (errno == EAGAIN) {
+            received = 0;
+        } else {
+            RTC_LOG(LS_WARNING) << "recv from error: " << strerror(errno)
+                << ", errno: " << errno;
+            return -1;
+        }
+    } else if (0 == received) {
+        RTC_LOG(LS_WARNING) << "recv from error: " << strerror(errno)
+            << ", errno: " << errno;
+        return -1;
+    }
+
+    return received;
+}
+
+int sock_send_to(int sock, const char* buf, size_t len, int flag, 
+    struct sockaddr* addr, socklen_t addr_len)
+{
+    int sent = sendto(sock, buf, len, flag, addr, addr_len);
+    if (sent < 0) {
+        if (EAGAIN == errno || EWOULDBLOCK == errno) {
+            sent = 0;
+        } else {
+            RTC_LOG(LS_WARNING) << "sendto error: " << strerror(errno)
+                << ", errno: " << errno;
+            return -1;
+        }
+    } else if (sent == 0) {
+        RTC_LOG(LS_WARNING) << "sendto error: " << strerror(errno)
+            << ", errno: " << errno;
+        return -1;
+    }
+
+    return sent;
+}
+
+// 返回微秒
+int64_t sock_get_recv_timestamp(int sock) {
+    struct timeval time;
+    int ret = ioctl(sock, SIOCGSTAMP_OLD, &time);
+    if (ret != 0) {
+        return -1;
+    }
+
+    return time.tv_sec * 1000000 + time.tv_usec;
 }
 
 } // namespace xrtc
