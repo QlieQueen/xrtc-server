@@ -37,11 +37,11 @@ void signaling_worker_recv_nofify(EventLoop* /*el*/, IOWatcher* /*w*/, int fd, i
 void conn_io_cb(EventLoop* /*el*/, IOWatcher* /*w*/, int fd, int events, void* data) {
     SignalingWorker* worker = (SignalingWorker*)data;
 
-    if (events && EventLoop::READ) {
+    if (events & EventLoop::READ) {
         worker->_read_query(fd);
     }
 
-    if (events && EventLoop::WRITE) {
+    if (events & EventLoop::WRITE) {
         worker->_write_query(fd);
     }
 
@@ -279,6 +279,8 @@ void SignalingWorker::_new_conn(int fd) {
                          << "invalid fd: " << fd;
         return;
     }
+
+    sock_setnonblock(fd);
 
     TcpConnection* c = new TcpConnection(fd);
     sock_peer_to_str(c->fd, c->ip, &(c->port));

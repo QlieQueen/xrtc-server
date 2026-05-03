@@ -285,7 +285,7 @@ std::string SessionDescription::to_string() {
     t=0 0
     */
     ss << "v=0\r\n";
-    ss << "0=- 0 2 IN IP4 127.0.0.0\r\n";
+    ss << "o=- 0 2 IN IP4 127.0.0.0\r\n";
     ss << "s=-\r\n";
     ss << "t=0 0\r\n";
 

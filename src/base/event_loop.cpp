@@ -52,10 +52,10 @@ public:
 };
 
 // void (*cb)(EV_P_ struct type *w, int revents);
-static void generic_io_cb(struct ev_loop* /*loop*/, ev_io* io, int /*revents*/) {
+static void generic_io_cb(struct ev_loop* /*loop*/, ev_io* io, int revents) {
     IOWatcher* watcher = (IOWatcher*)(io->data); // io携带的数据data是其对应的IOWatcher对象
     // cb是我们的自定义回调，所以传入的事件events和数据data一定是我们自定义的。
-    watcher->cb(watcher->el, watcher, io->fd, TRAN_FROM_EV_MASK(io->events), watcher->data);
+    watcher->cb(watcher->el, watcher, io->fd, TRAN_FROM_EV_MASK(revents), watcher->data);
 }
 
 IOWatcher* EventLoop::create_io_event(io_cb_t cb, void* data) {
