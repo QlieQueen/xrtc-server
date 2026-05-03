@@ -3,11 +3,14 @@
 
 #include <stdint.h>
 #include <string>
+#include <unordered_map>
+
 #include <rtc_base/rtc_certificate.h>
 
 namespace xrtc {
 
 class EventLoop;
+class PushStream;
 
 class RtcStreamManager {
 public:
@@ -26,6 +29,7 @@ public:
 
 private:
     EventLoop* _el = nullptr;
+    std::unordered_map<std::string, PushStream*> _push_streams;
 };
 
 } // namespace xrtc

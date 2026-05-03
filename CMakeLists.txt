@@ -32,6 +32,8 @@ file (GLOB all_src
     "./src/base/*.cpp"
     "./src/server/*.cpp"
     "./src/stream/*.cpp"
+    "./src/pc/*.cpp"
+    "./src/ice/*.cpp"
 )
 
 # ============================================================
@@ -61,15 +63,15 @@ enable_testing()
 
 # 使用FetchContent自动下载Google Test
 include(FetchContent)
-FetchContent_Declare(
-    googletest
-    URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
-    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-)
+# FetchContent_Declare(
+#     googletest
+#     URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
+#     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+# )
 
 FetchContent_Declare(
     googletest
-    SOURCE_DIR /home/ydqun/workspace/lessons/myxrtc1.0/cpp/googletest-1.14.0
+    SOURCE_DIR ${CMAKE_SOURCE_DIR}/../googletest-1.14.0
 )
 
 # 设置Google Test的编译选项（不编译不必要的部分）
@@ -94,6 +96,8 @@ file (GLOB test_src
     "./test/server/*.cpp"
     "./src/server/*.cpp"
     "./src/stream/*.cpp"
+    "./src/pc/*.cpp"
+    "./src/ice/*.cpp"
 )
 
 # ============================================================

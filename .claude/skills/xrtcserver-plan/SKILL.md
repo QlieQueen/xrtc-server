@@ -1,4 +1,5 @@
 ---
+name: "xrtcserver-plan"
 description: "通过沿着一条完整的 PUSH 请求链路逐层深入的方式,手写实现 xrtcserver 参考项目的 WebRTC 媒体中转服务"
 ---
 
@@ -8,6 +9,20 @@ description: "通过沿着一条完整的 PUSH 请求链路逐层深入的方式
 
 - **你自己的 xrtc-server**（待实现）：`/home/ydqun/workspace/webrtc/xrtc-server`
 - **参考项目 xrtcserver**（已完整实现）：`/home/ydqun/workspace/webrtc/xrtcserver`
+
+## 背景知识笔记
+
+每个 step 开始前，先到 `note/` 目录阅读该 step 的背景知识 markdown 文件。背景知识会解释该 step 涉及的 WebRTC 概念（SDP、STUN、DTLS、ICE 等），方便理解每一行代码在干什么再动手写。
+
+- `note/step1-sdp-background.md` — SDP 结构、各行含义、SSRC、FeedBack、CodecParam
+- 后续 step 依次补充
+
+## 实现方式：引导式自我实现
+
+本技能采用**引导式自我实现**模式：
+- Claude **不直接写代码**，而是告诉你每个文件需要什么内容、关键点是什么，以及为什么
+- 你**自己动手写**，遇到问题再问
+- 这种模式确保你真正理解每一行代码的含义，而不是复制粘贴
 
 ## 核心理念
 

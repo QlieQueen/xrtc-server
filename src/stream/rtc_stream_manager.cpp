@@ -1,6 +1,7 @@
 #include "stream/rtc_stream_manager.h"
 
 #include "base/event_loop.h"
+#include "stream/push_stream.h"
 
 namespace xrtc {
 
@@ -16,6 +17,9 @@ int RtcStreamManager::create_push_stream(uint64_t uid, const std::string& stream
     rtc::RTCCertificate* certificate,
     std::string& offer)
 {
+    PushStream* stream = new PushStream(_el, uid, stream_name, audio, video, log_id);
+    offer = stream->create_offer();    
+
     return 0;
 }
 
