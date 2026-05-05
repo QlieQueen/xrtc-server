@@ -4,16 +4,31 @@
 #include <string>
 #include <stdint.h>
 
+#include <rtc_base/socket_address.h>
+
+#include "ice/ice_def.h"
+
 namespace xrtc {
 
-struct Candidate {
+class Candidate {
+public:
+    uint32_t get_priority(uint32_t type_preference,
+        int network_adapter_preference,
+        int relay_preference);
+    
+    std::string to_string() const;
+
+public:
+    // //a=candidate:1975680953 1 udp 2113937151 120.76.197.143 10028 typ host
     std::string foundation;
-    int component_id = 1;
-    std::string protocol;
+    IceCandidateComponent component;
+    std::string protocol;    // UDP
     uint32_t priority;
-    std::string address;
-    uint16_t port;
-    std::string type;
+    rtc::SocketAddress address;
+    uint16_t port = 0;
+    std::string username;
+    std::string password;
+    std::string type;        // host
 };
 
 } // namespace xrtc
