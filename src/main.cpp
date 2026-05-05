@@ -2,8 +2,18 @@
 #include <thread>
 
 #include <signal.h>
+#include <execinfo.h>
+#include <stdio.h>
 
 #include "base/log.h"
+
+void crash_handler(int sig) {
+    fprintf(stderr, "\n=== CRASH: signal %d ===\n", sig);
+    void* bt[100];
+    int n = backtrace(bt, 100);
+    backtrace_symbols_fd(bt, n, 2 /*stderr*/);
+    _exit(1);
+}
 #include "base/conf.h"
 #include "server/rtc_server.h"
 #include "server/signaling_server.h"
@@ -93,6 +103,8 @@ void signal_process(int sig) {
 }
 
 int main() {
+    signal(SIGSEGV, crash_handler);
+    signal(SIGABRT, crash_handler);
 
     if (init_general_conf("./conf/general.yaml") != 0) {
         return -1;

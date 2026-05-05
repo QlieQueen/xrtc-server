@@ -5,7 +5,7 @@ project(xrtc-server)
 # ============================================================
 # 编译选项
 # ============================================================
-add_definitions("-g -pipe -W -Wall -fPIC -std=gnu++14 -DWEBRTC_POSIX -DWEBRTC_LINUX")
+add_definitions("-g -pipe -W -Wall -fPIC -rdynamic -std=gnu++14 -DWEBRTC_POSIX -DWEBRTC_LINUX")
 
 # ============================================================
 # 包含目录
