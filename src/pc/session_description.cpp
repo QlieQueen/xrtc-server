@@ -221,10 +221,10 @@ static void build_candidate(std::shared_ptr<MediaContentDescription> content,
 {
     for (auto& c : content->candidates()) {
         ss << "a=candidate:" << c.foundation
-           << " " << c.component_id
+           << " " << c.component
            << " " << c.protocol
            << " " << c.priority
-           << " " << c.address
+           << " " << c.address.ipaddr().ToString()
            << " " << c.port
            << " " << c.type
            << "\r\n";

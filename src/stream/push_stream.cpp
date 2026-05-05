@@ -1,6 +1,7 @@
 #include "stream/push_stream.h"
 
 #include "pc/session_description.h"
+#include "ice/ice_credentials.h"
 
 #include <rtc_base/logging.h>
 
@@ -22,11 +23,14 @@ std::string PushStream::create_offer() {
     SessionDescription offer(SdpType::k_offer);
     bool use_rtp_mux = true;
 
+    IceParameters ice_params = IceCredentials::create_random_ice_credentials();
+
     if (_audio) {
         auto audio = std::make_shared<AudioContentDescription>();
         audio->set_direction(RtpDirection::k_recv_only);
         audio->set_rtcp_mux(use_rtp_mux);
         offer.add_content(audio);
+        offer.add_transport_info(audio->mid(), ice_params, nullptr);
     }
 
     if (_video) {
@@ -34,6 +38,7 @@ std::string PushStream::create_offer() {
         video->set_direction(RtpDirection::k_recv_only);
         video->set_rtcp_mux(use_rtp_mux);
         offer.add_content(video);
+        offer.add_transport_info(video->mid(), ice_params, nullptr);
     }
 
     if (use_rtp_mux) {

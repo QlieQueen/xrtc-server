@@ -1,12 +1,18 @@
 #include "stream/rtc_stream_manager.h"
 
+#include "base/conf.h"
 #include "base/event_loop.h"
 #include "stream/push_stream.h"
 
+extern xrtc::GeneralConf* g_conf;
+
 namespace xrtc {
 
-RtcStreamManager::RtcStreamManager(EventLoop* el) : _el(el) {
-
+RtcStreamManager::RtcStreamManager(EventLoop* el) :
+    _el(el),
+    _allocator(new PortAllocator())
+{
+    _allocator->set_port_range(g_conf->ice_min_port, g_conf->ice_max_port);
 }
 
 RtcStreamManager::~RtcStreamManager() {
@@ -19,6 +25,9 @@ int RtcStreamManager::create_push_stream(uint64_t uid, const std::string& stream
 {
     PushStream* stream = new PushStream(_el, uid, stream_name, audio, video, log_id);
     offer = stream->create_offer();    
+
+
+    _push_streams[stream_name] = stream;
 
     return 0;
 }
