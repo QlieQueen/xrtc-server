@@ -26,8 +26,8 @@ int RtcStreamManager::create_push_stream(uint64_t uid, const std::string& stream
     std::string& offer)
 {
     PushStream* stream = new PushStream(_el, _allocator.get(), uid, stream_name, audio, video, log_id);
-    offer = stream->create_offer();    
-
+    stream->start(certificate);
+    offer = stream->create_offer();
 
     _push_streams[stream_name] = stream;
 

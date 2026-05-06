@@ -15,4 +15,8 @@ RtcStream::RtcStream(EventLoop* el, PortAllocator* allocator, uint64_t uid, cons
 RtcStream::~RtcStream() {
 }
 
+void RtcStream::start(rtc::RTCCertificate* certificate) {
+    _certificate = certificate;
+}
+
 } // namespace xrtc

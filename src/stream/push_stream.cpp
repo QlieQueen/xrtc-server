@@ -53,7 +53,7 @@ std::string PushStream::create_offer() {
         audio->set_rtcp_mux(use_rtp_mux);
         audio->add_candidates(candidates);
         offer.add_content(audio);
-        offer.add_transport_info(audio->mid(), ice_params, nullptr);
+        offer.add_transport_info(audio->mid(), ice_params, _certificate);
     }
 
     if (_video) {
@@ -62,7 +62,7 @@ std::string PushStream::create_offer() {
         video->set_rtcp_mux(use_rtp_mux);
         video->add_candidates(candidates);
         offer.add_content(video);
-        offer.add_transport_info(video->mid(), ice_params, nullptr);
+        offer.add_transport_info(video->mid(), ice_params, _certificate);
     }
 
     if (use_rtp_mux) {

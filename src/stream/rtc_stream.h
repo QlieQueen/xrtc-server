@@ -4,6 +4,8 @@
 #include <string>
 #include <stdint.h>
 
+#include <rtc_base/rtc_certificate.h>
+
 #include "ice/port_allocator.h"
 
 namespace xrtc {
@@ -14,7 +16,11 @@ class RtcStream {
 public:
     RtcStream(EventLoop* el, PortAllocator* allocator, uint64_t uid,
         const std::string& stream_name, bool audio, bool video, uint32_t log_id);
+
     virtual ~RtcStream();
+
+    void start(rtc::RTCCertificate* certificate);
+
     virtual std::string create_offer() = 0;
     uint64_t get_uid() { return _uid; }
     std::string get_stream_name() { return _stream_name; }
@@ -27,6 +33,7 @@ protected:
     bool _video;
     uint32_t _log_id;
     PortAllocator* _allocator;
+    rtc::RTCCertificate* _certificate;
 };
 
 
