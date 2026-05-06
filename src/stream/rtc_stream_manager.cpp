@@ -12,7 +12,9 @@ RtcStreamManager::RtcStreamManager(EventLoop* el) :
     _el(el),
     _allocator(new PortAllocator())
 {
-    _allocator->set_port_range(g_conf->ice_min_port, g_conf->ice_max_port);
+    if (g_conf) {
+        _allocator->set_port_range(g_conf->ice_min_port, g_conf->ice_max_port);
+    }
 }
 
 RtcStreamManager::~RtcStreamManager() {
@@ -23,7 +25,7 @@ int RtcStreamManager::create_push_stream(uint64_t uid, const std::string& stream
     rtc::RTCCertificate* certificate,
     std::string& offer)
 {
-    PushStream* stream = new PushStream(_el, uid, stream_name, audio, video, log_id);
+    PushStream* stream = new PushStream(_el, _allocator.get(), uid, stream_name, audio, video, log_id);
     offer = stream->create_offer();    
 
 

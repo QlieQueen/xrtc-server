@@ -71,7 +71,8 @@ include(FetchContent)
 
 FetchContent_Declare(
     googletest
-    SOURCE_DIR ${CMAKE_SOURCE_DIR}/../googletest-1.14.0
+    URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 
 # 设置Google Test的编译选项（不编译不必要的部分）

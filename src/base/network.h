@@ -32,7 +32,7 @@ public:
     ~NetworkManager();
 
     // 获取所有网卡
-    std::vector<Network*> get_networks() const { return _networks; }
+    const std::vector<Network*>& get_networks() const { return _networks; }
 
     // 获取第一个可用网卡（ICE至少需要一个地址）
     Network* get_first_network() const;

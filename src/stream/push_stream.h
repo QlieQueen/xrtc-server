@@ -2,16 +2,20 @@
 #define __PUSH_STREAM_H_
 
 #include "stream/rtc_stream.h"
+#include "ice/udp_port.h"
 
 namespace xrtc {
 
 class PushStream : public RtcStream {
 public:
-    PushStream(EventLoop* el, uint64_t uid, const std::string& stream_name,
+    PushStream(EventLoop* el, PortAllocator* allocator, uint64_t uid, const std::string& stream_name,
         bool audio, bool video, uint32_t log_id);
     ~PushStream() override;
 
     std::string create_offer() override;
+
+private:
+    std::vector<UDPPort*> _ports;
 };
 
 } // namespace xrtc

@@ -4,13 +4,15 @@
 #include <string>
 #include <stdint.h>
 
+#include "ice/port_allocator.h"
+
 namespace xrtc {
 
 class EventLoop;
 
 class RtcStream {
 public:
-    RtcStream(EventLoop* el, uint64_t uid,
+    RtcStream(EventLoop* el, PortAllocator* allocator, uint64_t uid,
         const std::string& stream_name, bool audio, bool video, uint32_t log_id);
     virtual ~RtcStream();
     virtual std::string create_offer() = 0;
@@ -24,6 +26,7 @@ protected:
     bool _audio;
     bool _video;
     uint32_t _log_id;
+    PortAllocator* _allocator;
 };
 
 
