@@ -15,7 +15,7 @@ void PortAllocator::set_port_range(int min_port, int max_port) {
     }
 
     if (max_port > 0) {
-        _max_port = min_port;
+        _max_port = max_port;
     }
 }
 
