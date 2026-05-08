@@ -23,6 +23,7 @@ public:
 
     void set_ice_params(const IceParameters& ice_params);
     const std::string& transport_name() { return _transport_name; }
+    IceCandidateComponent component() { return _component; }
     void gathering_candidate();
 
 public:
