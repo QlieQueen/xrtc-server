@@ -6,6 +6,7 @@
 
 #include <rtc_base/rtc_certificate.h>
 
+#include "pc/peer_connection.h"
 #include "ice/port_allocator.h"
 
 namespace xrtc {
@@ -32,8 +33,7 @@ protected:
     bool _audio;
     bool _video;
     uint32_t _log_id;
-    PortAllocator* _allocator;
-    rtc::RTCCertificate* _certificate;
+    PeerConnection* _pc;
 };
 
 

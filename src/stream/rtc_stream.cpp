@@ -8,15 +8,20 @@ RtcStream::RtcStream(EventLoop* el, PortAllocator* allocator, uint64_t uid, cons
         bool audio, bool video, uint32_t log_id) :
         _el(el), _uid(uid), _stream_name(stream_name),
         _audio(audio), _video(video), _log_id(log_id),
-        _allocator(allocator)
+        _pc(new PeerConnection(_el, allocator))
 {
 }
 
 RtcStream::~RtcStream() {
+    if (_pc) {
+        delete _pc;
+        _pc = nullptr;
+    }
+
 }
 
 void RtcStream::start(rtc::RTCCertificate* certificate) {
-    _certificate = certificate;
+    _pc->init(certificate);
 }
 
 } // namespace xrtc

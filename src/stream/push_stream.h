@@ -15,7 +15,6 @@ public:
     std::string create_offer() override;
 
 private:
-    std::vector<UDPPort*> _ports;
 };
 
 } // namespace xrtc
