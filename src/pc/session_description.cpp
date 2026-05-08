@@ -150,7 +150,7 @@ bool SessionDescription::is_bundle(const std::string& mid) {
 }
 
 std::string SessionDescription::get_first_bundle_mid() {
-    auto groups = get_group_by_name("BUNDLE");
+    auto groups = get_group_by_name("BUNDLE"); // bundle group中必定有名为BUNDLE的group
     if (groups.empty()) {
         return "";
     }
