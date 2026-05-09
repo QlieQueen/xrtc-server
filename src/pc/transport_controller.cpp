@@ -47,6 +47,28 @@ int TransportController::set_local_description(SessionDescription* desc) {
     return 0;
 }
 
+int TransportController::set_remote_description(SessionDescription* remote_desc) {
+    if (!remote_desc) {
+        return -1;
+    }
+
+    for (auto content : remote_desc->contents()) {
+        std::string mid = content->mid();
+
+        if (remote_desc->is_bundle(mid) && mid != remote_desc->get_first_bundle_mid()) {
+            continue;
+        }
+
+        auto td = remote_desc->get_transport_info(mid);
+        if (td) {
+            _ice_agent->set_remote_ice_params(mid, IceCandidateComponent::RTP,
+                IceParameters(td->ice_ufrag, td->ice_pwd));
+        }
+    }
+
+    return 0;
+}
+
 
 void TransportController::set_local_certificate(rtc::RTCCertificate* cert) {
     _local_certificate = cert;

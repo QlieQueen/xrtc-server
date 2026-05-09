@@ -26,6 +26,9 @@ public:
     void set_ice_params(const std::string& transport_name,
             IceCandidateComponent component,
             const IceParameters& ice_params);
+    void set_remote_ice_params(const std::string& transport_name,
+            IceCandidateComponent component,
+            const IceParameters& remote_ice_params);
     void gathering_candidate();
 
 public:

@@ -30,6 +30,10 @@ void IceTransportChannel::set_ice_params(const IceParameters& ice_params) {
     _ice_params = ice_params;
 }
 
+void IceTransportChannel::set_remote_ice_params(const IceParameters& remote_ice_params) {
+    _remote_ice_params = remote_ice_params;
+}
+
 void IceTransportChannel::gathering_candidate() {
     // 1.检查_ice_params的ufrag/pwd非空
     if (_ice_params.ice_ufrag.empty() || _ice_params.ice_pwd.empty()) {

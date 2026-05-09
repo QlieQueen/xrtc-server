@@ -17,6 +17,8 @@ public:
     ~TransportController();
 
     int set_local_description(SessionDescription* desc);
+    int set_remote_description(SessionDescription* remote_desc);
+
     void set_local_certificate(rtc::RTCCertificate* cert); // 先存着，DTLS握手时使用
 
 public:
