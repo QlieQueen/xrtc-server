@@ -5,6 +5,7 @@
 #include <rtc_base/logging.h>
 #include <rtc_base/string_encode.h>
 #include <rtc_base/third_party/sigslot/sigslot.h>
+#include <absl/algorithm/container.h>
 
 #include "pc/peer_connection_def.h"
 
@@ -85,6 +86,55 @@ std::string PeerConnection::create_offer(const RTCOfferAnswerOptions& options) {
     return _local_desc->to_string();
 }
 
+// a=ice-ufrag:clientUfrag
+static std::string get_attribute(const std::string& line) {
+    std::vector<std::string> fields;
+    size_t size = rtc::tokenize(line, ':', &fields);
+    if (size != 2) {
+        RTC_LOG(LS_WARNING) << "get attribute error: " << line;
+        return "";
+    }
+    return fields[1];
+}
+
+static int parse_transport_info(TransportDescription* td,
+        const std::string& line)
+{
+    if (line.find("a=ice-ufrag") != std::string::npos) {
+        td->ice_ufrag = get_attribute(line);
+        if (td->ice_ufrag.empty()) {
+            return -1;
+        }
+    } else if (line.find("a=ice-pwd") != std::string::npos) {
+        td->ice_pwd = get_attribute(line);
+        if (td->ice_pwd.empty()) {
+            return -1;
+        }
+    } else if (line.find("a=fingerprint") != std::string::npos) {
+        // a=fingerprint:sha-256 4E:0A:88:FB:7F:D7:1D:13:49:8F:FF:27:EA:78:11:64:15:92:F7:B3:F3:F2:F5:89:3F:93:B3:04:14:84:0F:C2
+        std::vector<std::string> items;
+        rtc::tokenize(line, ' ', &items); // 分隔算法和指纹内容
+        if (items.size() != 2) {
+            RTC_LOG(LS_WARNING) << "parse a=fingerprint error: " << line;
+            return -1;
+        }
+
+        // a=fingerprint: -> 14位
+        std::string alg = items[0].substr(14); // sha-256
+        absl::c_transform(alg, alg.begin(), ::tolower); // 转小写
+        std::string content = items[1];
+
+        td->identity_fingerprint = rtc::SSLFingerprint::CreateUniqueFromRfc4572(
+            alg, content);
+        if (!(td->identity_fingerprint.get())) {
+            RTC_LOG(LS_WARNING) << "create fingerprint error: " << line;
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
 int PeerConnection::set_remote_sdp(const std::string& sdp) {
     // 1. 按\n分割
     std::vector<std::string> fields;
@@ -107,6 +157,9 @@ int PeerConnection::set_remote_sdp(const std::string& sdp) {
     // 4. 预创建 content
     auto audio_content = std::make_shared<AudioContentDescription>();
     auto video_content = std::make_shared<VideoContentDescription>();
+
+    auto audio_td = std::make_shared<TransportDescription>();
+    auto video_td = std::make_shared<TransportDescription>();
 
     // 5. 逐行处理
     for (auto field : fields) {
@@ -141,6 +194,16 @@ int PeerConnection::set_remote_sdp(const std::string& sdp) {
                 _remote_desc->add_content(video_content);
             } else {
                 RTC_LOG(LS_WARNING) << "Invalid remote sdp, has invalid media type: " << media_type;    
+            }
+        }
+        
+        if ("audio" == media_type) {
+            if (parse_transport_info(audio_td.get(), field)) {
+                return -1;
+            }
+        } else if ("video" == media_type) {
+            if (parse_transport_info(video_td.get(), field)) {
+                return -1;
             }
         }
 
