@@ -23,6 +23,7 @@ public:
     void start(rtc::RTCCertificate* certificate);
 
     virtual std::string create_offer() = 0;
+    int set_remote_sdp(const std::string& sdp);
     uint64_t get_uid() { return _uid; }
     std::string get_stream_name() { return _stream_name; }
 
