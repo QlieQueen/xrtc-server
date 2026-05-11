@@ -2,6 +2,23 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Background Documentation Rules (CRITICAL)
+
+When writing background/technical documentation (e.g., `note/phase*-background.md`), **every technical detail must be derived from and verified against the reference project's actual source code** (`/home/ydqun/workspace/lession/xrtcserver/src/`), never from training data "memory" or assumptions.
+
+Concrete example of what went wrong:
+- **STUN Message Type bit layout**: I drew `|0 0|M|M M|M|M M|C|M|M M|C|C|C|` from training data memory — completely fabricated.
+- **Correct layout** (derived from `stun.h` constants `k_stun_class_mask = 0x0110`, `k_stun_method_mask = 0x3EEF`):
+  ```
+  |0 0|M11|M10|M9|M8|M7|C1|M6|M5|M4|C0|M3|M2|M1|M0|
+  ```
+  C0 is at bit 4 (`0x010`), C1 is at bit 8 (`0x100`). Class mask `0x0110` = bits 4+8.
+
+Rules:
+1. **Bit layouts, protocol fields, constants, enum values** — must be traced back to a specific line in the reference code. If you cannot point to the line, do not write the claim.
+2. **"It looks right" is not a valid reason.** If you have not read it from the reference code in the current session, verify it before writing.
+3. **When in doubt, read the reference code first**, write the document second.
+
 ## Build & Test Commands
 
 ```bash

@@ -101,7 +101,20 @@ int UDPPort::send_to(const char* buf, size_t len, const rtc::SocketAddress& addr
 void UDPPort::_on_read_packet(AsyncUdpSocket* socket, char* buf, size_t size,
                 const rtc::SocketAddress& addr, int64_t ts)
 {
+    std::unique_ptr<StunMessage> stun_msg;
+    bool res = get_stun_message(buf, size, &stun_msg);
 
+    RTC_LOG(LS_WARNING) << "==========================res: " << res;
+}
+
+bool UDPPort::get_stun_message(const char* buf, size_t len,
+        std::unique_ptr<StunMessage>* out_msg)
+{
+    if (!StunMessage::validate_fingerprint(buf, len)) {
+        return false;
+    }
+
+    return true;
 }
 
 std::string UDPPort::to_string() {
