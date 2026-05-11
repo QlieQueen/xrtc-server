@@ -226,7 +226,7 @@ static void build_candidate(std::shared_ptr<MediaContentDescription> content,
            << " " << c.priority
            << " " << c.address.ipaddr().ToString()
            << " " << c.port
-           << " " << c.type
+           << " typ " << c.type
            << "\r\n";
     }    
 }
