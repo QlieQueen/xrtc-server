@@ -5,91 +5,136 @@
 
 namespace xrtc {
 
-const char EMPTY_TRANSACTION_ID[] = "000000000000"; // 96bits
+// ============================================================================
+// STUN 常量
+// ============================================================================
+
+// 未初始化时使用的空 Transaction ID (12 个 '0')
+const char EMPTY_TRANSACTION_ID[] = "000000000000"; // 96 bits
+
+// FINGERPRINT 属性的 XOR 常量 (RFC 5389 第 15.5 节)
+// CRC32 计算结果需要与这个值做异或再写入属性
 const size_t STUN_FINGERPRINT_XOR_VALUE = 0x5354554e;
+
+// ============================================================================
+// StunMessage — 构造函数 / 析构函数
+// ============================================================================
 
 StunMessage::StunMessage() :
     _type(0),
     _length(0),
     _transaction_id(EMPTY_TRANSACTION_ID)
 {
-
 }
 
 StunMessage::~StunMessage() = default;
 
+// ============================================================================
+// StunMessage::validate_fingerprint — 快速指纹校验
+//
+// 在 read() 之前独立调用，用于快速校验 STUN 包的合法性。
+// 如果能通过这个校验，几乎可以确定是一个合法的 STUN 包。
+//
+// RFC 5389 第 15.5 节规定:
+//   1. FINGERPRINT 必须是消息的最后一个属性
+//   2. CRC32 计算范围: 从消息头开始，到 FINGERPRINT 属性之前结束 (不含 FINGERPRINT 属性本身)
+//   3. 计算公式: CRC32(data, len - 8) ^ 0x5354554E == fingerprint_value
+//
+// 校验步骤:
+//   1. 长度检查: 必须是 4 的倍数 + 至少包含一个 FINGERPRINT 属性
+//   2. Magic Cookie 检查: 必须是 0x2112A442
+//   3. 属性头检查: 最后一个属性必须是 FINGERPRINT (type=0x8028, length=4)
+//   4. CRC32 检查: 用消息内容计算 CRC32，与指纹值比对
+// ============================================================================
 bool StunMessage::validate_fingerprint(const char* data, size_t len) {
-    // 检查长度
-    // 1. 长度必须是4的整数倍（不是也会填充）
-    // 2. stun包至少包含一个fingerprint的属性
+    // 1. 长度检查
+    // fingerprint 属性 = attr_header(4) + uint32(4) = 8 字节
     size_t fingerprint_attr_size = k_stun_attribute_header_size +
         StunUint32Attribute::SIZE;
+
+    // STUN 包长度必须是 4 的倍数 (RFC 5389 第 7 节: 消息长度对齐)
+    // 包总长度必须 >= 头部(20) + FINGERPRINT 属性(8)
     if (len % 4 != 0 || len < k_stun_head_size + fingerprint_attr_size) {
         return false;
     }
 
-    // 检查magic_cookie
-    // (为什么要先定位到transaction id的起始地址，在减去magic cookie的大小这种方式？直接偏移 type 和 length的长度不行吗？)
+    // 2. Magic Cookie 检查
+    // k_stun_transaction_id_offset = 8, k_stun_magic_cookie_length = 4
+    // → magic_cookie 位于 data + 8 - 4 = data + 4 (即头部第 4 个字节)
     const char* magic_cookie = data + k_stun_transaction_id_offset -
-        k_stun_magic_cookie_length; // 定位到magic cookie的位置
+        k_stun_magic_cookie_length; // 定位到 magic cookie 的位置
     if (rtc::GetBE32(magic_cookie) != k_stun_magic_cookie) {
         return false;
     }
 
-    // 检查attr type和length
-    // fingerprint属性必须是stun报文的最后一个属性(RFC 5389 15.5节)
-    // 所以可以直接从报文末尾回退来定位，无需遍历所有属性
+    // 3. FINGERPRINT 属性头和长度检查
+    // fingerprint 是最后一个属性，所以从报文末尾回退来定位即可，无需遍历所有属性
     const char* fingerprint_attr_data = data + len - fingerprint_attr_size;
-    if (rtc::GetBE16(fingerprint_attr_data) != STUN_ATTR_FINGERPRINT ||
-        rtc::GetBE16(fingerprint_attr_data + sizeof(uint16_t)) !=
-        StunUint32Attribute::SIZE)
-    {
+
+    // 检查属性 type 是否为 FINGERPRINT (0x8028)
+    if (rtc::GetBE16(fingerprint_attr_data) != STUN_ATTR_FINGERPRINT) {
+        return false;
+    }
+    // 检查属性 length 是否等于 4 (uint32 的大小)
+    if (rtc::GetBE16(fingerprint_attr_data + sizeof(uint16_t)) !=
+        StunUint32Attribute::SIZE) {
         return false;
     }
 
-    // 检查fingerprint的值
+    // 4. CRC32 校验
+    // fingerprint_attr_data + k_stun_attribute_header_size = 指纹 value 的起始位置
     uint32_t fingerprint = rtc::GetBE32(fingerprint_attr_data +
-        k_stun_attribute_header_size); // 获取报文中fingerprint属性的value值
-    
-    // STUN FINGERPRINT 校验：
-    // RFC 5389 第15.5节规定：
-    //   1. FINGERPRINT必须是消息的最后一个属性
-    //   2. CRC32计算范围是从消息头开始到FINGERPRINT属性之前（即不包含FINGERPRINT属性本身）
-    //   3. 计算完成后，结果需要与 STUN_FINGERPRINT_XOR_VALUE(0x5354554e) 进行异或，再与报文中的值比较
-    //
-    // fingerprint_attr_size = 属性头(4字节) + 属性值(4字节) = 8字节
-    // data + len 指向报文末尾
-    // data + len - fingerprint_attr_size 定位到 FINGERPRINT 属性的起始位置
-    // len - fingerprint_attr_size 是 CRC32 计算的数据长度（排除整个FINGERPRINT属性）
-    return (fingerprint ^ STUN_FINGERPRINT_XOR_VALUE) == 
+        k_stun_attribute_header_size);
+
+    // data + len = 报文末尾
+    // data + len - fingerprint_attr_size = FINGERPRINT 属性起始位置
+    // len - fingerprint_attr_size = 需要计算 CRC32 的数据长度 (排除整个 FINGERPRINT 属性)
+    return (fingerprint ^ STUN_FINGERPRINT_XOR_VALUE) ==
         rtc::ComputeCrc32(data, len - fingerprint_attr_size);
 }
 
+// ============================================================================
+// StunMessage::read — 解析 STUN 消息
+//
+// 从 ByteBufferReader 中读取完整的 STUN 消息:
+//   1. 读头部: type(2) + length(2) + magic_cookie(4) + transaction_id(12)
+//   2. 循环读取属性: attr_type(2) + attr_length(2) + value(attr_length) + padding
+//
+// 属性通过 _create_attribute() 工厂创建，不认识的类型会被跳过 (Consume 掉数据)
+// ============================================================================
 bool StunMessage::read(rtc::ByteBufferReader* buf) {
-    // 1. 读 type (2字节)
+    if (!buf) return false;
+
+    // --- 读消息头部 (20 字节) ---
+
+    // 1. 读 type (2 字节)
     if (!buf->ReadUInt16(&_type)) return false;
 
-    // 2. 排除 RTP/RTCP (前2位=10 的不是 STUN 包)
-    // 00 1000 0000 0000
-    if (_type & 0x800) return false;
+    // 2. 排除 RTP/RTCP:
+    //    RTP 包前 2 位固定为 10 (version=2)
+    //    STUN 包前 2 位固定为 00
+    //    bit 11 (0x0800) = 1 表示这不是 STUN (是 RTP/RTCP)
+    if (_type & 0x0800) return false;
 
-    // 3. 读 length (2字节)
+    // 3. 读 length (2 字节): 属性部分的总长度 (不含 20 字节头部)
     if (!buf->ReadUInt16(&_length)) return false;
 
-    // 4. 读 magic cookie (4字节)
+    // 4. 读 Magic Cookie (4 字节): 固定值 0x2112A442
     std::string magic_cookie;
     if (!buf->ReadString(&magic_cookie, k_stun_magic_cookie_length)) {
         return false;
     }
 
-    // 5. 读 transaction id
+    // 5. 读 Transaction ID (12 字节 = 96 bits)
     std::string transaction_id;
     if (!buf->ReadString(&transaction_id, k_stun_transaction_id_length)) {
         return false;
     }
 
-    // 6. 兼容经典 STUN： magic cookie 不等于 0x2112A442时
-    //    把 magic_cookie 的4字节并入 transaction_id（经典STUN的transaction id是128 bits）
+    // 6. 兼容经典 STUN (RFC 3489):
+    //    经典 STUN 没有 Magic Cookie，其 transaction ID 是 128 bits
+    //    如果 Magic Cookie 不等于 0x2112A442，说明这是一个经典 STUN 包，
+    //    把 magic_cookie 的 4 字节并入 transaction_id 前部 (共 16 字节 = 128 bits)
     uint32_t magic_cookie_int;
     memcpy(&magic_cookie_int, magic_cookie.data(), sizeof(magic_cookie_int));
     if (rtc::NetworkToHost32(magic_cookie_int) != k_stun_magic_cookie) {
@@ -97,36 +142,175 @@ bool StunMessage::read(rtc::ByteBufferReader* buf) {
     }
     _transaction_id = transaction_id;
 
-    // 7. 头部读完后，buf 剩余的数据就是value，其长度应该等于解析出来的长度 _length (属性总长度)
+    // 7. 校验剩余长度:
+    //    buf->Length() 是读完头部后剩余的数据量
+    //    它必须等于 _length (属性部分的声明长度)
     if (buf->Length() != _length) return false;
 
     _attrs.resize(0);
+
+    // --- 循环读取属性 (TLV 格式) ---
+    // 每个属性: Type(2) + Length(2) + Value(Length 字节) + Padding(0~3 字节)
     while (buf->Length() > 0) {
-        // 每个属性都是TLV格式， T->type，L->length，V-> value(属性值)
         uint16_t attr_type, attr_length;
         if (!buf->ReadUInt16(&attr_type)) return false;
         if (!buf->ReadUInt16(&attr_length)) return false;
-        
-        // 工厂方法创建属性 -- 目前返回 nullptr （后续 commit 才填充）
-        std::unique_ptr<StunAttribute> attr = _create_attribute(attr_type, attr_length);
-        if (!attr) { // 不认识的属性
-            // 4 字节对齐()
+
+        // 工厂方法: 根据 attr_type 创建对应的 StunAttribute 子类
+        // 返回 nullptr 表示不认识的属性类型
+        std::unique_ptr<StunAttribute> attr(_create_attribute(attr_type, attr_length));
+        if (!attr) {
+            // --- 不认识的属性: 跳过 ---
+            // STUN 要求 value 长度是 4 字节对齐 (RFC 5389 第 15 节)
+            // 不足 4 的倍数则填充到 4 的倍数，所以消费的时候也要考虑对齐
             if (attr_length % 4 != 0) {
                 attr_length += (4 - (attr_length % 4));
             }
+            // Consume: 直接从缓冲区中丢弃 attr_length 字节
             if (!buf->Consume(attr_length)) return false;
         } else {
+            // --- 认识的属性: 读取 value ---
+            // 调用子类的 read() 方法解析 value 数据
             if (!attr->read(buf)) return false;
             _attrs.push_back(std::move(attr));
         }
     }
+
     return true;
 }
 
-// 工厂模式 暂时未实现
-std::unique_ptr<StunAttribute> StunMessage::_create_attribute(uint16_t attr_type, uint16_t attr_length) {
+// ============================================================================
+// StunMessage::get_attribute_value_type — 属性类型映射
+//
+// 将 attribute type ID 映射为 value 的存储类型。
+// 这是工厂模式的关键: 看到 type ID 就知道要创建哪种 StunAttribute 子类。
+// ============================================================================
+StunAttributeValueType StunMessage::get_attribute_value_type(int type) {
+    switch (type) {
+        case STUN_ATTR_USERNAME:
+        case STUN_ATTR_MESSAGE_INTEGRITY:
+            // USERNAME 和 MESSAGE-INTEGRITY 的 value 都是字节串
+            return STUN_VALUE_BYTE_STRING;
+        default:
+            return STUN_VALUE_UNKNOWN;
+    }
+}
+
+// ============================================================================
+// StunMessage::get_byte_string — 按类型查找 ByteString 属性
+//
+// 在 _attrs 中查找 type 匹配的属性，并 static_cast 为 StunByteStringAttribute*
+// 用于 stun binding request 中检查 USERNAME / MESSAGE-INTEGRITY 属性是否存在
+// ============================================================================
+const StunByteStringAttribute* StunMessage::get_byte_string(uint16_t type) {
+    return static_cast<const StunByteStringAttribute*>(_get_attribute(type));
+}
+
+// ============================================================================
+// StunMessage::_get_attribute — 遍历查找属性
+//
+// 遍历 _attrs 列表，找到第一个 type 匹配的属性。
+// 如果没有找到，返回 nullptr。
+// ============================================================================
+StunAttribute* StunMessage::_get_attribute(uint16_t type) {
+    for (const auto& attr : _attrs) {
+        if (attr->type() == type) {
+            return attr.get();
+        }
+    }
     return nullptr;
 }
 
+// ============================================================================
+// StunMessage::_create_attribute — 属性工厂
+//
+// 两步:
+//   1. get_attribute_value_type() — 查 type → value_type 映射
+//   2. StunAttribute::create()     — 根据 value_type 实例化具体子类
+//
+// 如果 type 不在任何映射中 (返回 STUN_VALUE_UNKNOWN)，返回 nullptr，
+// read() 会自动跳过该属性。
+// ============================================================================
+StunAttribute* StunMessage::_create_attribute(uint16_t attr_type, uint16_t attr_length) {
+    StunAttributeValueType value_type = get_attribute_value_type(attr_type);
+    if (STUN_VALUE_UNKNOWN == value_type) {
+        return nullptr;
+    }
+    return StunAttribute::create(value_type, attr_type, attr_length, this);
+}
+
+// ============================================================================
+// StunAttribute — 属性基类实现
+// ============================================================================
+
+StunAttribute::StunAttribute(uint16_t type, uint16_t length)
+    : _type(type), _length(length) {}
+
+StunAttribute::~StunAttribute() = default;
+
+// ============================================================================
+// StunAttribute::create — 静态工厂方法
+//
+// 根据 value_type 创建具体的 StunAttribute 子类实例。
+// 返回裸指针，调用方用 unique_ptr 接管所有权。
+//
+// ============================================================================
+StunAttribute* StunAttribute::create(StunAttributeValueType value_type,
+        uint16_t type, uint16_t length, void* /*owner*/)
+{
+    switch (value_type) {
+        case STUN_VALUE_BYTE_STRING:
+            return new StunByteStringAttribute(type, length);
+        default:
+            return nullptr;
+    }
+}
+
+// ============================================================================
+// StunAttribute::consume_padding — 消费填充字节
+//
+// RFC 5389 第 15 节: 属性 value 长度必须是 4 的倍数。
+// 如果实际 value 长度不是 4 的倍数，会在末尾填充 0 补齐。
+// 这个方法消费这些填充字节。
+//
+// 例如: attr_length=7, 7%4=3, 填充 4-3=1 字节
+//       总占用 = 7 + 1 = 8 字节 (4 字节对齐)
+// ============================================================================
+void StunAttribute::consume_padding(rtc::ByteBufferReader* buf) {
+    int remain = length() % 4;
+    if (remain > 0) {
+        buf->Consume(4 - remain);
+    }
+}
+
+// ============================================================================
+// StunByteStringAttribute — 字节串属性实现
+//
+// 用于 USERNAME (local_ufrag:remote_ufrag) 和 MESSAGE-INTEGRITY (HMAC-SHA1 值)
+// 数据存储在堆上的 _bytes 数组中，长度由基类的 _length 记录。
+// ============================================================================
+
+StunByteStringAttribute::StunByteStringAttribute(uint16_t type, uint16_t length) :
+    StunAttribute(type, length) {}
+
+StunByteStringAttribute::~StunByteStringAttribute() {
+    if (_bytes) {
+        delete []_bytes;
+        _bytes = nullptr;
+    }
+}
+
+// read: 从 buf 中读取 length() 字节到 _bytes，然后消费 padding
+bool StunByteStringAttribute::read(rtc::ByteBufferReader* buf) {
+    _bytes = new char[length()];
+    if (!buf->ReadBytes(_bytes, length())) {
+        return false;
+    }
+
+    // 消费属性 value 的填充字节 (不足 4 倍数的补齐部分)
+    consume_padding(buf);
+
+    return true;
+}
 
 } // namespace xrtc
