@@ -2,6 +2,25 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Teaching Method: Entry-Point Code Derivation (CRITICAL)
+
+When guiding the user through implementing a new feature or commit, **always start from the entry point** (the call site) and derive code outward, implementing only what the current call chain demands. Never dump all code for a commit at once.
+
+**The rule**: Begin at the function where execution enters (e.g., `get_stun_message`). As you need a method/constant/type that doesn't exist yet, pause and implement it — then resume the calling code. This mirrors how a developer naturally writes code: from the call site downward.
+
+**Example (bad)**: "This commit adds validate_message_integrity, IntegrityStatus enum, _validate_message_integrity_of_type, HMAC computation, _buffer saving in read(), k_stun_message_integrity_size constant, and the udp_port.cpp call." — dumping everything at once.
+
+**Example (good)**:
+1. Start at `get_stun_message` — "you need to call a method on stun_msg to validate MI, what should it take?"
+2. When user figures out `validate_message_integrity(password)`, ask "what should it return? just bool? or are there multiple states?"
+3. Only then introduce the `IntegrityStatus` enum
+4. Then go into `validate_message_integrity` implementation, discovering what it needs step by step
+
+**Key principles**:
+- Constants, enums, helper methods are introduced **only when the calling code demands them**
+- Each step is a question: "what does this need?" not "here's what to add"
+- The user writes code at each step, not at the end
+
 ## Background Documentation Rules (CRITICAL)
 
 When writing background/technical documentation (e.g., `note/phase*-background.md`), **every technical detail must be derived from and verified against the reference project's actual source code** (`/home/ydqun/workspace/lession/xrtcserver/src/`), never from training data "memory" or assumptions.
