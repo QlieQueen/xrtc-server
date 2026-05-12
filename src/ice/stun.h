@@ -49,12 +49,13 @@ namespace xrtc {
 // ============================================================================
 
 // --- STUN 消息头部常量 ---
-const size_t k_stun_head_size = 20;                // 头部固定 20 字节
+const size_t k_stun_header_size = 20;                // 头部固定 20 字节
 const size_t k_stun_attribute_header_size = 4;     // 属性头部: type(2) + length(2)
 const size_t k_stun_transaction_id_offset = 8;     // Transaction ID 在头部的起始偏移
 const size_t k_stun_transaction_id_length = 12;    // Transaction ID 长度: 96 bits
 const uint32_t k_stun_magic_cookie = 0x2112A442;   // Magic Cookie 固定值
 const size_t k_stun_magic_cookie_length = sizeof(k_stun_magic_cookie);
+const size_t k_stun_message_integrity_size = 20;   // mi属性的value的长度
 
 // --- STUN 消息类型 (type 字段的解析值, 方法 + class) ---
 enum StunMessageType {
@@ -90,6 +91,13 @@ class StunByteStringAttribute;
 // ============================================================================
 class StunMessage {
 public:
+    enum class IntegrityStatus {
+        k_not_set,
+        k_no_integrity,
+        k_integrity_ok,
+        k_integrity_bad
+    };
+
     StunMessage();
     ~StunMessage();
 
@@ -97,6 +105,7 @@ public:
     // 检查 FINGERPRINT 属性的 CRC32 值是否合法
     // 这是最快速的合法性检查，能过滤掉绝大部分非法包
     static bool validate_fingerprint(const char* data, size_t len);
+    IntegrityStatus validate_message_integrity(const std::string& password);
 
     // --- 消息解析 ---
     // 从 ByteBufferReader 中读取并解析完整 STUN 消息 (头部 + 所有属性)
@@ -123,11 +132,18 @@ private:
     // 在 _attrs 中查找指定 type 的属性
     StunAttribute* _get_attribute(uint16_t type);
 
+    bool _validate_message_integrity_of_type(uint16_t mi_attr_type,
+        size_t mi_attr_size, const char* data, size_t size,
+        const std::string& password);
+
 private:
     uint16_t _type;                                 // 消息类型 (方法 + class)
     uint16_t _length;                               // 属性部分总长度 (不含 20 字节头部)
     std::string _transaction_id;                    // 事务 ID (96 bits)
     std::vector<std::unique_ptr<StunAttribute>> _attrs;  // 已解析的属性列表
+    IntegrityStatus _integrity = IntegrityStatus::k_not_set;
+    std::string _password; // local_ice_pwd
+    std::string _buffer;
 };
 
 // ============================================================================

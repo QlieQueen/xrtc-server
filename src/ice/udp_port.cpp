@@ -136,6 +136,13 @@ bool UDPPort::get_stun_message(const char* data, size_t len,
             // todo
             return true;
         }
+
+        if (stun_msg->validate_message_integrity(_ice_params.ice_pwd) !=
+                StunMessage::IntegrityStatus::k_integrity_ok)
+        {
+            // todo
+            return true;
+        }
     }
 
 

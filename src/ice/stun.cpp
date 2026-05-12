@@ -2,6 +2,7 @@
 
 #include <rtc_base/byte_order.h>
 #include <rtc_base/crc32.h>
+#include <rtc_base/message_digest.h>
 
 namespace xrtc {
 
@@ -54,7 +55,7 @@ bool StunMessage::validate_fingerprint(const char* data, size_t len) {
 
     // STUN 包长度必须是 4 的倍数 (RFC 5389 第 7 节: 消息长度对齐)
     // 包总长度必须 >= 头部(20) + FINGERPRINT 属性(8)
-    if (len % 4 != 0 || len < k_stun_head_size + fingerprint_attr_size) {
+    if (len % 4 != 0 || len < k_stun_header_size + fingerprint_attr_size) {
         return false;
     }
 
@@ -94,6 +95,161 @@ bool StunMessage::validate_fingerprint(const char* data, size_t len) {
 }
 
 // ============================================================================
+// StunMessage::validate_message_integrity — MESSAGE-INTEGRITY 验证 (RFC 5389 §15.4)
+//
+// MESSAGE-INTEGRITY 用于验证 STUN 消息未被篡改。
+// 机制: 发送方用 ice_pwd 作为密钥，对消息内容计算 HMAC-SHA1(20 字节)，
+//       写入 MESSAGE-INTEGRITY 属性。接收方用同样的密钥重新计算 HMAC 并比对。
+//
+// 关键规则 (RFC 5389 §15.4):
+//   1. MESSAGE-INTEGRITY 始终放在 FINGERPRINT 之前
+//   2. HMAC 计算前，消息头中的 length 必须调整为"指向 MI 属性末尾"
+//      (包含 MI 自身，但不含后面的 FINGERPRINT)
+//   3. HMAC key = ice_pwd（STUN 长期凭据密码）
+//
+// 返回 IntegrityStatus:
+//   - k_not_set: 未调用此方法
+//   - k_no_integrity: 消息中没有 MESSAGE-INTEGRITY 属性
+//   - k_integrity_ok: HMAC 验证通过
+//   - k_integrity_bad: HMAC 验证失败 (消息被篡改或密码不匹配)
+// ============================================================================
+StunMessage::IntegrityStatus StunMessage::validate_message_integrity(const std::string& password) {
+    _password = password;
+
+    // 1. 检查消息中是否包含 MESSAGE-INTEGRITY 属性
+    if (get_byte_string(STUN_ATTR_MESSAGE_INTEGRITY)) {
+        // 2. 对原始字节数据 _buffer 做 HMAC 验证
+        //    注意: 必须传 _buffer (原始字节)，不能用 read() 解析后的 _attrs 列表，
+        //    因为 HMAC 计算依赖精确的字节布局 (属性顺序、padding 等)
+        if (_validate_message_integrity_of_type(STUN_ATTR_MESSAGE_INTEGRITY,
+                    k_stun_message_integrity_size,
+                    _buffer.c_str(), _buffer.length(),
+                    password))
+        {
+            _integrity = IntegrityStatus::k_integrity_ok;
+        } else {
+            _integrity = IntegrityStatus::k_integrity_bad;
+        }
+    } else {
+        _integrity = IntegrityStatus::k_no_integrity;
+    }
+
+    return _integrity;
+}
+
+// ============================================================================
+// _validate_message_integrity_of_type — HMAC-SHA1 验证核心
+//
+// 参数:
+//   mi_attr_type: MESSAGE-INTEGRITY 属性 type (0x0008)
+//   mi_attr_size: MESSAGE-INTEGRITY value 长度 (20 字节)
+//   data / size:  完整 STUN 消息的原始字节
+//   password:     ice_pwd (用作 HMAC key)
+//
+// 验证步骤:
+//   1. 基本合法性检查 (size 对齐 + header length 一致性)
+//   2. 遍历属性找到 MESSAGE-INTEGRITY 所在位置
+//   3. 拷贝 [0, mi_pos) 的原始数据为 temp_data
+//   4. 若 MI 之后还有属性 (如 FINGERPRINT)，修正 temp_data 头部的 length 字段,
+//      使其指向 MI 属性末尾 (包含 MI，但不含 FINGERPRINT)
+//   5. 对 temp_data 计算 HMAC-SHA1(password, temp_data)
+//   6. 比较计算结果与 MI 属性中的 value
+// ============================================================================
+bool StunMessage::_validate_message_integrity_of_type(uint16_t mi_attr_type,
+        size_t mi_attr_size, const char* data, size_t size,
+        const std::string& password)
+{
+    // ---- 第 1 步: 基本合法性检查 ----
+    // STUN 消息长度必须是 4 的倍数 (RFC 5389 §7)
+    if (size % 4 != 0 || size < k_stun_header_size) {
+        return false;
+    }
+
+    // 消息头中的 length 字段必须与实际 size 一致
+    // data[2] 是 Message Length 字段 (2 字节，不含 20 字节头)
+    uint16_t length = rtc::GetBE16(&data[2]);
+    if (length + k_stun_header_size != size) {
+        return false;
+    }
+
+    // ---- 第 2 步: 遍历属性，定位 MESSAGE-INTEGRITY 位置 ----
+    // 从头部之后 (偏移 20) 开始扫描 TLV 属性
+    // 需要找到 MI 属性在原始字节中的偏移位置 mi_pos
+    size_t current_pos = k_stun_header_size;
+    bool has_message_integrity = false;
+    while (current_pos + k_stun_attribute_header_size <= size) {
+        uint16_t attr_type;
+        uint16_t attr_length;
+        attr_type = rtc::GetBE16(&data[current_pos]);
+        attr_length = rtc::GetBE16(&data[current_pos + sizeof(attr_type)]);
+
+        if (attr_type == mi_attr_type) {
+            has_message_integrity = true;
+            break;  // current_pos 就是 MI 属性的起始偏移
+        }
+
+        // 跳过当前属性: header(4) + value(attr_length) + padding
+        current_pos += k_stun_attribute_header_size + attr_length;
+        // RFC 5389: 属性 value 按 4 字节对齐，不足则填充
+        if (attr_length % 4 != 0) {
+            current_pos += (4 - (attr_length % 4));
+        }
+    }
+
+    if (!has_message_integrity) {
+        return false;
+    }
+
+    // ---- 第 3 步: 拷贝消息中 MI 之前的部分 ----
+    // mi_pos = MI 属性在原始数据中的起始偏移
+    // 拷贝 data[0..mi_pos) → temp_data
+    // 这段数据包含: 消息头 + MI 之前的所有属性 (如 USERNAME)
+    size_t mi_pos = current_pos;
+    std::unique_ptr<char[]> temp_data(new char[mi_pos]);
+    memcpy(temp_data.get(), data, mi_pos);
+
+    // ---- 第 4 步: 修正 temp_data 头部的 length 字段 ----
+    // RFC 5389 §15.4: HMAC 计算时，消息头中的 length 必须调整为
+    // "指向 MI 属性末尾" — 即包含 MI 自身，但不含其后的任何属性。
+    //
+    // 场景: 消息属性 = [USERNAME] [MESSAGE-INTEGRITY] [FINGERPRINT]
+    //   原始 length = USERNAME + MI(4+20) + FINGERPRINT(8) = 44
+    //   修正 length = USERNAME + MI(4+20) = 36 (只去掉 FINGERPRINT)
+    //
+    // 如果 MI 之后还有属性 (如 FINGERPRINT)：
+    //   extra_size = FINGERPRINT 占用的字节数
+    //   adjust_new_len = 消息总长 - extra_size - 消息头(20)
+    //                  = 所有属性中 MI(含) 之前的属性总长
+    if (size > current_pos + k_stun_attribute_header_size + k_stun_message_integrity_size) {
+        size_t extra_pos = mi_pos + k_stun_attribute_header_size + mi_attr_size;
+        // extra_pos = MI 属性之后的第一个字节偏移
+        size_t extra_size = size - extra_pos;
+        // extra_size = MI 之后所有属性的总字节数 (如 FINGERPRINT: 4+4=8)
+        size_t adjust_new_len = size - extra_size - k_stun_header_size;
+        // adjust_new_len = MI 之前的属性总长 = mi_pos - 20
+        // 写入 temp_data 头部偏移 2 处，替换原来的 length 字段
+        rtc::SetBE16(temp_data.get() + 2, adjust_new_len);
+    }
+
+    // ---- 第 5 步: 计算 HMAC-SHA1 ----
+    // key   = ice_pwd (password)
+    // data  = temp_data (消息头 + MI 之前的属性)
+    // 结果  = 20 字节 hmac
+    char hmac[k_stun_message_integrity_size];
+    size_t ret = rtc::ComputeHmac(rtc::DIGEST_SHA_1, password.c_str(),
+            password.length(), temp_data.get(), current_pos, hmac,
+            sizeof(hmac));
+    if (ret != k_stun_message_integrity_size) {
+        return false;
+    }
+
+    // ---- 第 6 步: 比对 HMAC ----
+    // 计算出的 hmac 与 MI 属性中的 value 逐字节比较
+    // mi_pos + 4 (跳过 attr type + attr length) = MI value 的位置
+    return memcmp(data + mi_pos + k_stun_attribute_header_size, hmac, mi_attr_size) == 0;
+}
+
+// ============================================================================
 // StunMessage::read — 解析 STUN 消息
 //
 // 从 ByteBufferReader 中读取完整的 STUN 消息:
@@ -104,6 +260,8 @@ bool StunMessage::validate_fingerprint(const char* data, size_t len) {
 // ============================================================================
 bool StunMessage::read(rtc::ByteBufferReader* buf) {
     if (!buf) return false;
+
+    _buffer.assign(buf->Data(), buf->Length());
 
     // --- 读消息头部 (20 字节) ---
 
