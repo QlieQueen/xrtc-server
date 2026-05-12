@@ -6,6 +6,7 @@
 
 #include <rtc_base/logging.h>
 #include <rtc_base/crc32.h>
+#include <rtc_base/byte_buffer.h>
 
 #include "base/socket.h"
 
@@ -107,12 +108,22 @@ void UDPPort::_on_read_packet(AsyncUdpSocket* socket, char* buf, size_t size,
     RTC_LOG(LS_WARNING) << "==========================res: " << res;
 }
 
-bool UDPPort::get_stun_message(const char* buf, size_t len,
+bool UDPPort::get_stun_message(const char* data, size_t len,
         std::unique_ptr<StunMessage>* out_msg)
 {
-    if (!StunMessage::validate_fingerprint(buf, len)) {
+    if (!StunMessage::validate_fingerprint(data, len)) {
         return false;
     }
+
+    // 创建 StunMessage，用 ByteBufferReader 包装数据，调用stun_message->read()
+    // 把数据完整读入到stun_message
+    std::unique_ptr<StunMessage> stun_msg = std::make_unique<StunMessage>();
+    rtc::ByteBufferReader buf(data, len);
+    if (!stun_msg->read(&buf) || buf.Length() != 0) {
+        return false;
+    }
+
+    *out_msg = std::move(stun_msg);
 
     return true;
 }

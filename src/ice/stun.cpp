@@ -63,8 +63,69 @@ bool StunMessage::validate_fingerprint(const char* data, size_t len) {
     // len - fingerprint_attr_size 是 CRC32 计算的数据长度（排除整个FINGERPRINT属性）
     return (fingerprint ^ STUN_FINGERPRINT_XOR_VALUE) == 
         rtc::ComputeCrc32(data, len - fingerprint_attr_size);
+}
 
+bool StunMessage::read(rtc::ByteBufferReader* buf) {
+    // 1. 读 type (2字节)
+    if (!buf->ReadUInt16(&_type)) return false;
 
+    // 2. 排除 RTP/RTCP (前2位=10 的不是 STUN 包)
+    // 00 1000 0000 0000
+    if (_type & 0x800) return false;
+
+    // 3. 读 length (2字节)
+    if (!buf->ReadUInt16(&_length)) return false;
+
+    // 4. 读 magic cookie (4字节)
+    std::string magic_cookie;
+    if (!buf->ReadString(&magic_cookie, k_stun_magic_cookie_length)) {
+        return false;
+    }
+
+    // 5. 读 transaction id
+    std::string transaction_id;
+    if (!buf->ReadString(&transaction_id, k_stun_transaction_id_length)) {
+        return false;
+    }
+
+    // 6. 兼容经典 STUN： magic cookie 不等于 0x2112A442时
+    //    把 magic_cookie 的4字节并入 transaction_id（经典STUN的transaction id是128 bits）
+    uint32_t magic_cookie_int;
+    memcpy(&magic_cookie_int, magic_cookie.data(), sizeof(magic_cookie_int));
+    if (rtc::NetworkToHost32(magic_cookie_int) != k_stun_magic_cookie) {
+        transaction_id.insert(0, magic_cookie);
+    }
+    _transaction_id = transaction_id;
+
+    // 7. 头部读完后，buf 剩余的数据就是value，其长度应该等于解析出来的长度 _length (属性总长度)
+    if (buf->Length() != _length) return false;
+
+    _attrs.resize(0);
+    while (buf->Length() > 0) {
+        // 每个属性都是TLV格式， T->type，L->length，V-> value(属性值)
+        uint16_t attr_type, attr_length;
+        if (!buf->ReadUInt16(&attr_type)) return false;
+        if (!buf->ReadUInt16(&attr_length)) return false;
+        
+        // 工厂方法创建属性 -- 目前返回 nullptr （后续 commit 才填充）
+        std::unique_ptr<StunAttribute> attr = _create_attribute(attr_type, attr_length);
+        if (!attr) { // 不认识的属性
+            // 4 字节对齐()
+            if (attr_length % 4 != 0) {
+                attr_length += (4 - (attr_length % 4));
+            }
+            if (!buf->Consume(attr_length)) return false;
+        } else {
+            if (!attr->read(buf)) return false;
+            _attrs.push_back(std::move(attr));
+        }
+    }
+    return true;
+}
+
+// 工厂模式 暂时未实现
+std::unique_ptr<StunAttribute> StunMessage::_create_attribute(uint16_t attr_type, uint16_t attr_length) {
+    return nullptr;
 }
 
 
