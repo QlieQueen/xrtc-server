@@ -182,6 +182,8 @@ public:
     // 从 buf 中读取 length() 字节到 _bytes
     bool read(rtc::ByteBufferReader* buf) override;
 
+    std::string get_string() const { return std::string(_bytes, length()); }
+
 private:
     char* _bytes = nullptr;
 };
