@@ -17,6 +17,18 @@ const char EMPTY_TRANSACTION_ID[] = "000000000000"; // 96 bits
 // CRC32 计算结果需要与这个值做异或再写入属性
 const size_t STUN_FINGERPRINT_XOR_VALUE = 0x5354554e;
 
+const char STUN_ERROR_REASON_BAD_REQUEST[] = "Bad Request";
+const char STUN_ERROR_REASON_UNATHORIZED[] = "Unathorized";
+
+std::string stun_method_to_string(int type) {
+    switch (type) {
+        case STUN_BINDING_REQUEST:
+            return "BINDING REQUEST";
+        default:
+            return "Unknown<" + std::to_string(type) + ">";
+    }
+}
+
 // ============================================================================
 // StunMessage — 构造函数 / 析构函数
 // ============================================================================

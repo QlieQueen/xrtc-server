@@ -69,6 +69,15 @@ enum StunAttributeType {
     STUN_ATTR_FINGERPRINT        = 0x8028,   // 指纹: CRC32(message) ^ 0x5354554E
 };
 
+// --- Stun 协议错误码  ---
+enum StunErrorCode {
+    STUN_ERROR_BAD_REQUEST = 400,
+    STUN_ERROR_UNATHORIZED = 401,
+};
+
+extern const char STUN_ERROR_REASON_BAD_REQUEST[];
+extern const char STUN_ERROR_REASON_UNATHORIZED[];
+
 // --- 属性值的存储类型分类 ---
 // 不同 attribute type 的 value 存储方式不同:
 //   USERNAME → 字节串
@@ -81,6 +90,8 @@ enum StunAttributeValueType {
     STUN_VALUE_UINT32      = 1,   // 4 字节无符号整数
     STUN_VALUE_BYTE_STRING = 2,   // 可变长度字节串
 };
+
+std::string stun_method_to_string(int type);
 
 // 前置声明
 class StunAttribute;

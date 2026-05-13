@@ -26,7 +26,9 @@ public:
 
     int create_ice_candidate(Network* network, int min_port, int max_port, Candidate& c);
     bool get_stun_message(const char* buf, size_t len,
-            std::unique_ptr<StunMessage>* out_msg);
+            std::unique_ptr<StunMessage>* out_msg,
+            const rtc::SocketAddress& addr,
+            std::string* out_username);
 
     int send_to(const char* buf, size_t len, const rtc::SocketAddress& addr);
 
@@ -35,6 +37,10 @@ public:
     const rtc::SocketAddress& local_addr() const { return _local_addr; }
     const std::vector<Candidate>& condidates() const { return _candidates; }
     std::string to_string();
+    void send_binding_error_response(StunMessage* stun_msg,
+            const rtc::SocketAddress& addr,
+            int err_code,
+            const std::string& reason);
 
 private:
     void _on_read_packet(AsyncUdpSocket* socket, char* buf, size_t size,
