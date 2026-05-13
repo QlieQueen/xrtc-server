@@ -1,6 +1,7 @@
 #ifndef __UDP_PORT_H_
 #define __UDP_PORT_H_
 
+#include <map>
 #include <vector>
 #include <memory>
 #include <string>
@@ -17,6 +18,13 @@
 
 
 namespace xrtc {
+
+class IceConnection;
+
+// 按对端地址索引的 IceConnection map
+// key=对端 SocketAddress, value=对应的 IceConnection
+// 用于去重: 同一对端地址重复收到 STUN 包时复用已有连接
+typedef std::map<rtc::SocketAddress, IceConnection*> AddressMap;
 
 class UDPPort : public sigslot::has_slots<> {
 public:
@@ -41,6 +49,7 @@ public:
             const rtc::SocketAddress& addr,
             int err_code,
             const std::string& reason);
+    IceConnection* create_connection(const Candidate& remote_candidate);
 
     // STUN binding request 收到且校验通过后，发射此信号通知上层 (IceTransportChannel)
     // 参数: UDPPort自己, 对端地址, 解析好的stun_msg, 对端的remote_ufrag
@@ -62,6 +71,7 @@ private:
     std::unique_ptr<AsyncUdpSocket> _async_socket;
     rtc::SocketAddress _local_addr;
     std::vector<Candidate> _candidates;
+    AddressMap _connections;    // 按对端地址索引的 IceConnection (去重)
 };
 
 } // namespace xrtc

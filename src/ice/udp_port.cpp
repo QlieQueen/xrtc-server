@@ -9,6 +9,7 @@
 #include <rtc_base/byte_buffer.h>
 
 #include "base/socket.h"
+#include "ice/ice_connection.h"
 
 namespace xrtc {
 
@@ -255,6 +256,32 @@ void UDPPort::send_binding_error_response(StunMessage* stun_msg,
         const std::string& reason)
 {
     // TODO: 后续 commit 实现
+}
+
+// ============================================================================
+// UDPPort::create_connection — 创建一个 ICeConnection 并注册到 _connections
+//
+// 当收到一个对端地址的合法 binding request 时，为这个 remote candidate
+// 创建对应的 IceConnection 并存入 _connections map。
+//
+// 去重逻辑:
+//   - 向 _connections 插入 (key=remote_address, value=conn)
+//   - 若 key 已存在: 更新 value (替换为最新的 IceConnection)
+//   - 若 key 不存在: 插入新条目
+// ============================================================================
+IceConnection* UDPPort::create_connection(const Candidate& remote_candidate) {
+    IceConnection* conn = new IceConnection(_el, this, remote_candidate);
+    auto ret = _connections.insert(
+        std::make_pair(conn->remote_candidate().address, conn));
+    // true = 插入成功（key不存在）；false = 插入失败（key已存在），更新 value 指
+    if (ret.second == false && ret.first->second != conn) {
+        RTC_LOG(LS_WARNING) << to_string() << "create ice connection on "
+            << "an existing remote address, addr: "
+            << conn->remote_candidate().address.ToString();
+        ret.first->second = conn;
+    }
+
+    return conn;
 }
 
 } // namespace xrtc
