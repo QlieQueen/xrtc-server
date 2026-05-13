@@ -66,6 +66,7 @@ enum StunMessageType {
 enum StunAttributeType {
     STUN_ATTR_USERNAME           = 0x0006,   // 用户名: local_ufrag:remote_ufrag
     STUN_ATTR_MESSAGE_INTEGRITY  = 0x0008,   // 消息完整性: HMAC-SHA1(key=ice_pwd, data=message)
+    STUN_ATTR_PRIORITY           = 0X0024,
     STUN_ATTR_FINGERPRINT        = 0x8028,   // 指纹: CRC32(message) ^ 0x5354554E
 };
 
@@ -96,6 +97,7 @@ std::string stun_method_to_string(int type);
 // 前置声明
 class StunAttribute;
 class StunByteStringAttribute;
+class StunUint32Attribute;
 
 // ============================================================================
 // StunMessage — STUN 消息的编码/解码
@@ -125,6 +127,7 @@ public:
     // --- 访问器 ---
     int type() { return _type; }
     size_t length() { return _length; }
+    const std::string& transaction_id() { return _transaction_id; }
 
     // --- 属性类型映射 ---
     // 根据 attribute type 返回其 value 的存储类型
@@ -134,6 +137,9 @@ public:
     // --- 属性查询 ---
     // 获取指定 type 的 ByteString 属性 (用于 USERNAME / MESSAGE-INTEGRITY)
     const StunByteStringAttribute* get_byte_string(uint16_t type);
+    // 获取制定 type 的 Uint32 属性 （用于 PRIORITY）
+    const StunUint32Attribute* get_uint32_t(uint16_t type);
+
 
 private:
     // 工厂方法: 根据 type + length 创建对应的 StunAttribute 子类
@@ -196,6 +202,18 @@ private:
 class StunUint32Attribute : public StunAttribute {
 public:
     static const size_t SIZE = 4;
+    StunUint32Attribute(uint16_t type);
+    StunUint32Attribute(uint16_t type, uint32_t value);
+    ~StunUint32Attribute() override;
+
+    uint32_t value() const { return _bits; }
+    void set_value(uint32_t value) { _bits = value; }
+
+    // 从 buf 中读取 4 字节到 _bits
+    bool read(rtc::ByteBufferReader* buf) override;
+
+private:
+    uint32_t _bits;
 };
 
 // ============================================================================

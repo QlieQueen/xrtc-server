@@ -27,10 +27,15 @@ public:
     const std::string& transport_name() { return _transport_name; }
     IceCandidateComponent component() { return _component; }
     void gathering_candidate();
+    std::string to_string();
 
 public:
     sigslot::signal2<IceTransportChannel*, const std::vector<Candidate>&>
         signal_candidate_allocate_done;
+
+private:
+    void _on_unknown_address(UDPPort* port,
+            const rtc::SocketAddress& addr, StunMessage* stun_msg, const std::string& remote_ufrag);
 private:
     EventLoop* _el;
     std::string _transport_name;
