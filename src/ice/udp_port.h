@@ -42,6 +42,12 @@ public:
             int err_code,
             const std::string& reason);
 
+    // STUN binding request 收到且校验通过后，发射此信号通知上层 (IceTransportChannel)
+    // 参数: UDPPort自己, 对端地址, 解析好的stun_msg, 对端的remote_ufrag
+    // 上层收到后创建 peer reflexive candidate
+    sigslot::signal4<UDPPort*, const rtc::SocketAddress&, StunMessage*, const std::string&>
+            signal_unknown_address;
+
 private:
     void _on_read_packet(AsyncUdpSocket* socket, char* buf, size_t size,
                         const rtc::SocketAddress& addr, int64_t ts);
