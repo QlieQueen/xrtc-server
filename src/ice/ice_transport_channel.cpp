@@ -3,6 +3,8 @@
 #include <sstream>
 #include <rtc_base/logging.h>
 
+#include "ice/ice_connection.h"
+
 namespace xrtc {
 
 IceTransportChannel::IceTransportChannel(EventLoop* el, PortAllocator* alloctor,
@@ -127,6 +129,8 @@ void IceTransportChannel::_on_unknown_address(UDPPort* port,
 
     RTC_LOG(LS_INFO) << to_string() << ": create connection from "
         << "peer reflexive candidate success, remote_addr: " << addr.ToString();
+    
+    conn->handle_stun_binding_request(stun_msg);
 }
 
 std::string IceTransportChannel::to_string() {

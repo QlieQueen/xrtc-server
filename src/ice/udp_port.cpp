@@ -100,6 +100,10 @@ int UDPPort::send_to(const char* buf, size_t len, const rtc::SocketAddress& addr
     return _async_socket->send_to(buf, len, addr);
 }
 
+IceConnection* UDPPort::get_connection(const rtc::SocketAddress& addr) {
+    auto iter = _connections.find(addr);
+    return iter == _connections.end() ? nullptr : iter->second;
+}
 // ============================================================================
 // UDPPort::_on_read_packet — AsyncUdpSocket 的回调
 //
@@ -111,6 +115,12 @@ int UDPPort::send_to(const char* buf, size_t len, const rtc::SocketAddress& addr
 void UDPPort::_on_read_packet(AsyncUdpSocket* socket, char* buf, size_t size,
                 const rtc::SocketAddress& addr, int64_t ts)
 {
+    IceConnection* conn = get_connection(addr);
+    if (conn) {
+        conn->on_read_packet(buf, size, ts);
+        return;
+    }
+
     std::unique_ptr<StunMessage> stun_msg;
     std::string remote_ufrag;
     bool res = get_stun_message(buf, size, &stun_msg, addr, &remote_ufrag);
@@ -279,6 +289,8 @@ IceConnection* UDPPort::create_connection(const Candidate& remote_candidate) {
             << "an existing remote address, addr: "
             << conn->remote_candidate().address.ToString();
         ret.first->second = conn;
+        
+        //todo
     }
 
     return conn;

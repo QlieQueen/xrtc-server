@@ -32,6 +32,9 @@ public:
             IceCandidateComponent component, const IceParameters& ice_params);
     ~UDPPort();
 
+    std::string ice_ufrage() { return _ice_params.ice_ufrag; }
+    std::string ice_pwd() { return _ice_params.ice_pwd; }
+
     int create_ice_candidate(Network* network, int min_port, int max_port, Candidate& c);
     bool get_stun_message(const char* buf, size_t len,
             std::unique_ptr<StunMessage>* out_msg,
@@ -50,6 +53,7 @@ public:
             int err_code,
             const std::string& reason);
     IceConnection* create_connection(const Candidate& remote_candidate);
+    IceConnection* get_connection(const rtc::SocketAddress& addr);
 
     // STUN binding request 收到且校验通过后，发射此信号通知上层 (IceTransportChannel)
     // 参数: UDPPort自己, 对端地址, 解析好的stun_msg, 对端的remote_ufrag

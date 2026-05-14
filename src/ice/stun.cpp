@@ -107,6 +107,10 @@ bool StunMessage::validate_fingerprint(const char* data, size_t len) {
         rtc::ComputeCrc32(data, len - fingerprint_attr_size);
 }
 
+void StunMessage::add_fingerprint() {
+
+}
+
 // ============================================================================
 // StunMessage::validate_message_integrity — MESSAGE-INTEGRITY 验证 (RFC 5389 §15.4)
 //
@@ -148,6 +152,10 @@ StunMessage::IntegrityStatus StunMessage::validate_message_integrity(const std::
     }
 
     return _integrity;
+}
+
+bool StunMessage::add_message_integrity(const std::string& password) {
+
 }
 
 // ============================================================================
@@ -350,6 +358,18 @@ bool StunMessage::read(rtc::ByteBufferReader* buf) {
     return true;
 }
 
+
+void StunMessage::add_attribute(std::unique_ptr<StunAttribute> attr) {
+    size_t attr_len = attr->length();
+    if (attr_len % 4 != 0) {
+        attr_len += (4 - (attr_len % 4));
+    }
+
+    _length += attr_len;
+
+    _attrs.push_back(std::move(attr));
+}
+
 // ============================================================================
 // StunMessage::get_attribute_value_type — 属性类型映射
 //
@@ -462,6 +482,25 @@ void StunAttribute::consume_padding(rtc::ByteBufferReader* buf) {
     }
 }
 
+
+// Address
+StunAddressAttribute::StunAddressAttribute(uint16_t type,
+        const rtc::SocketAddress& addr) :
+    StunAttribute(type, 0) // 长度暂时为0，IPv4: 4字节
+{
+    //set_address(addr);
+}
+
+bool StunAddressAttribute::read(rtc::ByteBufferReader* buf) {
+    return true;
+}
+
+// Xor Address
+StunXorAddressAttribute::StunXorAddressAttribute(uint16_t type,
+        const rtc::SocketAddress& addr) :
+    StunAddressAttribute(type, addr)
+{
+}
 // ============================================================================
 
 // ============================================================================
