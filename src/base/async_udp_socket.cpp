@@ -9,8 +9,15 @@ namespace xrtc {
 
 const size_t MAX_BUF_SIZE = 1500;
 
-//typedef void (*io_cb_t)(EventLoop* el, IOWatcher* w, int fd, int events, void*data);
-void async_udp_socket_io_cb(EventLoop* el, IOWatcher* w, int fd, int events, void* data) {
+// ============================================================================
+// async_udp_socket_io_cb — libev I/O 回调
+//
+// READ 常驻: 构造时注册，持续监听 UDP 数据到达
+// WRITE 按需: 仅在队列有数据待发送时开启，发送完立刻关闭，避免 busy loop
+// ============================================================================
+void async_udp_socket_io_cb(EventLoop* el, IOWatcher* /*w*/,
+        int fd, int events, void* data)
+{
     AsyncUdpSocket* udp_socket = (AsyncUdpSocket*)data;
 
     if (events & EventLoop::READ) {
@@ -46,6 +53,8 @@ AsyncUdpSocket::~AsyncUdpSocket() {
     }
 }
 
+// Edge-triggered 风格: 一次 READ 事件循环读到 EAGAIN，清空内核缓冲区
+// 注意: _buf 被复用，上层回调必须同步复制数据，不能在异步回调中引用 _buf
 void AsyncUdpSocket::recv_data() {
     while (true) {
         struct sockaddr_in addr;
@@ -66,7 +75,10 @@ void AsyncUdpSocket::recv_data() {
     }
 }
 
-void AsyncUdpSocket::_send_data_from_list() {
+// 批量发送队列中所有待发 UDP 包
+// 返回 true: 队列已全部发送完毕
+// 返回 false: 发送缓冲区满 (sent==0) 或发送失败 (sent<0)，队列有残留
+bool AsyncUdpSocket::_send_data_from_list() {
     size_t len = 0;
     int sent = 0;
 
@@ -82,16 +94,17 @@ void AsyncUdpSocket::_send_data_from_list() {
                 packet->addr().ToString();
             delete packet;
             _udp_packet_list.pop_front();
-            return;
+            return false;
         } else if (0 == sent) {
             RTC_LOG(LS_WARNING) << "send 0 bytes, try again, remote_addr: "
                 << packet->addr().ToString();
-            return;
+            return false;
         } else {
             delete packet;
             _udp_packet_list.pop_front();
         }
     }
+    return true;
 }
 
 void AsyncUdpSocket::send_data() {
@@ -109,15 +122,21 @@ int AsyncUdpSocket::send_to(const char* data, size_t size,
     return _add_udp_packet(data, size, addr);
 }
 
+// 乐观发送:
+//   1. 先清队列 — 若队列有残留 (buffer 满)，放弃直接发送，直接入队
+//   2. 队列清空 → 尝试直接 sock_send_to，省去排队开销
+//   3. 直接发送失败 (sent==0) → 入队 + 开启 WRITE 事件等待唤醒
 int AsyncUdpSocket::_add_udp_packet(const char* data, size_t size,
     const rtc::SocketAddress& addr)
 {
     size_t len = 0;
     int sent = 0;
-    // 1.若list里还有数据未发送，先发送list里的数据
-    _send_data_from_list();
+    // 1. 先清积压队列；若队列仍有残留（缓冲区满），直接入队，避免无效发送
+    if (!_send_data_from_list()) {
+        goto SEND_AGAIN;
+    }
 
-        // 2、发送当前数据
+    // 2. 队列清空，尝试直接发送当前数据
     sockaddr_storage saddr;
     len = addr.ToSockAddrStorage(&saddr);
     sent = sock_send_to(_socket, data, size,
@@ -126,7 +145,7 @@ int AsyncUdpSocket::_add_udp_packet(const char* data, size_t size,
         RTC_LOG(LS_WARNING) << "send udp packet error, remote_addr: " << addr.ToString();
         return -1;
     } else if (0 == sent) {
-        RTC_LOG(LS_WARNING) << "send o bytes, try again, remote_addr: " <<
+        RTC_LOG(LS_WARNING) << "send 0 bytes, try again, remote_addr: " <<
             addr.ToString();
         goto SEND_AGAIN;
     }
@@ -134,7 +153,7 @@ int AsyncUdpSocket::_add_udp_packet(const char* data, size_t size,
     return size;
 
 SEND_AGAIN:
-    // 3、无法发送出去时，才开启写事件监控
+    // 3. 发送缓冲区满，入队等待 WRITE 事件唤醒
     UdpPacketData* packet_data = new UdpPacketData(data, size, addr);
     _udp_packet_list.push_back(packet_data);
     _el->start_io_event(_socket_watcher, _socket, EventLoop::WRITE);

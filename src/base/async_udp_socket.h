@@ -50,7 +50,7 @@ public:
 
 private:
     int _add_udp_packet(const char* data, size_t size, const rtc::SocketAddress& addr);
-    void _send_data_from_list();
+    bool _send_data_from_list();
 
 public:
     sigslot::signal5<AsyncUdpSocket*, char*, size_t, const::rtc::SocketAddress&, int64_t>
