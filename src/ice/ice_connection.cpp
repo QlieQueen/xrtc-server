@@ -48,19 +48,19 @@ void IceConnection::send_response_message(const StunMessage& response) {
     if (ret < 0) {
         RTC_LOG(LS_WARNING) << to_string() << ": send "
             << stun_method_to_string(response.type())
-            << " error, addr=" << addr.ToString()
+            << " error, to " << addr.ToString()
             << ", id=" << rtc::hex_encode(response.transaction_id());
         return;
     }
 
     RTC_LOG(LS_INFO) << to_string() << ": sent "
         << stun_method_to_string(response.type())
-        << " addr=" << addr.ToString()
+        << " to " << addr.ToString()
         << ", id=" << rtc::hex_encode(response.transaction_id());
 }
 
 void IceConnection::on_read_packet(const char* buf, size_t len, int64_t ts) {
-
+    std::unique_pr
 }
 
 std::string IceConnection::to_string() {

@@ -61,7 +61,7 @@ const size_t k_stun_message_integrity_size = 20;   // mi属性的value的长度
 // --- STUN 消息类型 (type 字段的解析值, 方法 + class) ---
 enum StunMessageType {
     STUN_BINDING_REQUEST  = 0x0001,  // Binding 请求: method=Binding(0x001) + class=Request(0x000)
-    STUN_BINDING_RESPONSE = 0x1001,
+    STUN_BINDING_RESPONSE = 0x0101,
 };
 
 // --- STUN 属性类型 (attr_type, RFC 5389 第 18 节) ---
@@ -147,12 +147,12 @@ public:
     void add_attribute(std::unique_ptr<StunAttribute> attr);
 
     // --- 访问器 ---
-    int type() { return _type; }
+    int type() const { return _type; }
     void set_type(uint16_t type) { _type = type; }
-    size_t length() { return _length; }
+    size_t length() const { return _length; }
     void set_length(uint16_t length) { _length = length; }
 
-    const std::string& transaction_id() { return _transaction_id; }
+    const std::string& transaction_id() const { return _transaction_id; }
     void set_transaction_id(const std::string& transaction_id) { 
         _transaction_id = transaction_id; // 只支持新版本
     }

@@ -26,6 +26,8 @@ std::string stun_method_to_string(int type) {
     switch (type) {
         case STUN_BINDING_REQUEST:
             return "BINDING REQUEST";
+        case STUN_BINDING_RESPONSE:
+            return "BINDING RESPONSE";
         default:
             return "Unknown<" + std::to_string(type) + ">";
     }
