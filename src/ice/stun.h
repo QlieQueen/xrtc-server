@@ -76,7 +76,7 @@ enum StunAttributeType {
 // --- Stun 协议错误码  ---
 enum StunErrorCode {
     STUN_ERROR_BAD_REQUEST = 400,
-    STUN_ERROR_UNATHORIZED = 401,
+    STUN_ERROR_UNAUTHORIZED = 401,
     STUN_ERROR_SERVER_ERROR = 500
 };
 
@@ -89,7 +89,7 @@ enum StunAddressFamily {
 };
 
 extern const char STUN_ERROR_REASON_BAD_REQUEST[];
-extern const char STUN_ERROR_REASON_UNATHORIZED[];
+extern const char STUN_ERROR_REASON_UNAUTHORIZED[];
 extern const char STUN_ERROR_REASON_SERVER_ERROR[];
 
 // --- 属性值的存储类型分类 ---

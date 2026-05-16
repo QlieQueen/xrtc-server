@@ -182,8 +182,8 @@ bool UDPPort::get_stun_message(const char* data, size_t len,
                 << stun_method_to_string(stun_msg->type())
                 << " with bad ufrag: " << local_ufrag
                 << " from " << addr.ToString();
-            send_binding_error_response(stun_msg.get(), addr, STUN_ERROR_UNATHORIZED,
-                STUN_ERROR_REASON_UNATHORIZED);
+            send_binding_error_response(stun_msg.get(), addr, STUN_ERROR_UNAUTHORIZED,
+                STUN_ERROR_REASON_UNAUTHORIZED);
             return true;
         }
 
@@ -195,8 +195,8 @@ bool UDPPort::get_stun_message(const char* data, size_t len,
                 << stun_method_to_string(stun_msg->type())
                 << " with Bad M-I from "
                 << addr.ToString();
-            send_binding_error_response(stun_msg.get(), addr, STUN_ERROR_UNATHORIZED,
-                STUN_ERROR_REASON_UNATHORIZED);
+            send_binding_error_response(stun_msg.get(), addr, STUN_ERROR_UNAUTHORIZED,
+                STUN_ERROR_REASON_UNAUTHORIZED);
             return true;
         }
 
