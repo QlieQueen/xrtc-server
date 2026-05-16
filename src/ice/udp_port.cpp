@@ -123,7 +123,7 @@ void UDPPort::_on_read_packet(AsyncUdpSocket* socket, char* buf, size_t size,
 
     std::unique_ptr<StunMessage> stun_msg;
     std::string remote_ufrag;
-    bool res = get_stun_message(buf, size, &stun_msg, addr, &remote_ufrag);
+    bool res = get_stun_message(buf, size, addr, &stun_msg, &remote_ufrag);
     if (!res || !stun_msg) {
         return;
     }
@@ -139,8 +139,8 @@ void UDPPort::_on_read_packet(AsyncUdpSocket* socket, char* buf, size_t size,
 }
 
 bool UDPPort::get_stun_message(const char* data, size_t len,
-        std::unique_ptr<StunMessage>* out_msg,
         const rtc::SocketAddress& addr,
+        std::unique_ptr<StunMessage>* out_msg,
         std::string* out_username)
 {
     // ---- 第 1 步: 快速 FINGERPRINT 校验 (CRC32) ----

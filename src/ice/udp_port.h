@@ -37,8 +37,8 @@ public:
 
     int create_ice_candidate(Network* network, int min_port, int max_port, Candidate& c);
     bool get_stun_message(const char* buf, size_t len,
-            std::unique_ptr<StunMessage>* out_msg,
             const rtc::SocketAddress& addr,
+            std::unique_ptr<StunMessage>* out_msg,
             std::string* out_username);
 
     int send_to(const char* buf, size_t len, const rtc::SocketAddress& addr);

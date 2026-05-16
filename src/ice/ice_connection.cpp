@@ -62,7 +62,7 @@ void IceConnection::on_read_packet(const char* buf, size_t len, int64_t ts) {
     std::unique_ptr<StunMessage> stun_msg;
     std::string remote_ufrag;
     const Candidate& remote = _remote_candidate;
-    if (!_port->get_stun_message(buf, len, &stun_msg, remote.address, &remote_ufrag)) {
+    if (!_port->get_stun_message(buf, len, remote.address, &stun_msg, &remote_ufrag)) {
         // 这个不是stun包，可能是其他的，比如dtls或者rtp包
     } else if (!stun_msg) {
 
