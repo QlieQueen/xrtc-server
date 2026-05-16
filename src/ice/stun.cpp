@@ -155,7 +155,31 @@ StunMessage::IntegrityStatus StunMessage::validate_message_integrity(const std::
 }
 
 bool StunMessage::add_message_integrity(const std::string& password) {
+    return _add_message_integrity_of_type(STUN_ATTR_MESSAGE_INTEGRITY,
+        k_stun_message_integrity_size, password.c_str(), password.size());
+}
 
+// 构造 MESSAGE-INTEGRITY 属性并写入消息
+// 流程: 创建 20 字节占位属性 → 加入消息 → 序列化整条消息到 buffer
+// 注意: commit 10 会在序列化后计算 HMAC 并替换占位符
+bool StunMessage::_add_message_integrity_of_type(uint16_t attr_type, uint16_t attr_size,
+        const char* key, size_t len)
+{
+    // 1. 创建占位属性: 20 字节 '0' (后续 commit 会用真实 HMAC 替换)
+    auto mi_attr_ptr = std::make_unique<StunByteStringAttribute>(attr_type,
+        std::string(attr_size, '0'));
+
+    // 2. 保存裸指针 — move 后 unique_ptr 所有权转移，但裸指针仍有效
+    StunByteStringAttribute* mi_attr_origin_ptr = mi_attr_ptr.get();
+    add_attribute(std::move(mi_attr_ptr));
+
+    // 3. 序列化整条消息 (header + 所有属性)
+    rtc::ByteBufferWriter buf;
+    if (!write(&buf)) {
+        return false;
+    }
+
+    return true;
 }
 
 // ============================================================================
@@ -358,6 +382,28 @@ bool StunMessage::read(rtc::ByteBufferReader* buf) {
     return true;
 }
 
+// 序列化 StunMessage 为 STUN 二进制格式 (RFC 5389 §6)
+// 顺序: type(2) + length(2) + magic_cookie(4) + transaction_id(12) + 属性列表(TLV)
+bool StunMessage::write(rtc::ByteBufferWriter* buf) const {
+    if (!buf) {
+        return false;
+    }
+
+    buf->WriteUInt16(_type);
+    buf->WriteUInt16(_length);
+    buf->WriteUInt32(k_stun_magic_cookie);
+    buf->WriteString(_transaction_id);
+
+    for (const auto& attr : _attrs) {
+        buf->WriteUInt16(attr->type());
+        buf->WriteUInt16(attr->length());
+        if (!attr->write(buf)) {
+            return false;
+        }
+    }
+
+    return true;
+}
 
 void StunMessage::add_attribute(std::unique_ptr<StunAttribute> attr) {
     size_t attr_len = attr->length();
@@ -365,7 +411,7 @@ void StunMessage::add_attribute(std::unique_ptr<StunAttribute> attr) {
         attr_len += (4 - (attr_len % 4));
     }
 
-    _length += attr_len;
+    _length += (attr_len + k_stun_attribute_header_size);
 
     _attrs.push_back(std::move(attr));
 }
@@ -482,16 +528,58 @@ void StunAttribute::consume_padding(rtc::ByteBufferReader* buf) {
     }
 }
 
+// RFC 5389 §15: 属性 value 长度必须是 4 的倍数，不足填充 0 字节
+void StunAttribute::write_padding(rtc::ByteBufferWriter* buf) {
+    int remain = length() % 4;
+    if (remain > 0) {
+        char zeros[4] = {0};
+        buf->WriteBytes(zeros, 4 - remain);
+    }
+}
 
 // Address
 StunAddressAttribute::StunAddressAttribute(uint16_t type,
         const rtc::SocketAddress& addr) :
     StunAttribute(type, 0) // 长度暂时为0，IPv4: 4字节
 {
-    //set_address(addr);
+    set_address(addr);
+}
+
+// 根据地址族自动设置属性 value 长度: IPv4=8, IPv6=20
+// STUN 地址属性格式: 0x00(1) + Family(1) + Port(2) + IP(4或16)
+void StunAddressAttribute::set_address(const rtc::SocketAddress& addr) {
+    _address = addr;
+
+    switch (family()) {
+        case STUN_ADDRESS_IPV4:
+            set_length(SIZE_IPV4);
+            break;
+        case STUN_ADDRESS_IPV6:
+            set_length(SIZE_IPV6);
+            break;
+        default:
+            set_length(SIZE_UNDEF);
+            break;
+    }
+}
+
+// 映射系统地址族 (AF_INET/AF_INET6) 到 STUN Address Family (0x01/0x02)
+StunAddressFamily StunAddressAttribute::family() {
+    switch (_address.family()) {
+        case AF_INET:
+            return STUN_ADDRESS_IPV4;
+        case AF_INET6:
+            return STUN_ADDRESS_IPV6;
+        default:
+            return STUN_ADDRESS_UNDEF;
+    }
 }
 
 bool StunAddressAttribute::read(rtc::ByteBufferReader* buf) {
+    return true;
+}
+
+bool StunAddressAttribute::write(rtc::ByteBufferWriter* buf) {
     return true;
 }
 
@@ -501,6 +589,12 @@ StunXorAddressAttribute::StunXorAddressAttribute(uint16_t type,
     StunAddressAttribute(type, addr)
 {
 }
+
+
+bool StunXorAddressAttribute::write(rtc::ByteBufferWriter* buf) {
+    return true;
+}
+
 // ============================================================================
 
 // ============================================================================
@@ -520,6 +614,12 @@ bool StunUint32Attribute::read(rtc::ByteBufferReader* buf) {
     return true;
 }
 
+// 写入 4 字节无符号整数 (FINGERPRINT, PRIORITY 等)
+bool StunUint32Attribute::write(rtc::ByteBufferWriter* buf) {
+    buf->WriteUInt32(_bits);
+    return true;
+}
+
 // ============================================================================
 // StunByteStringAttribute — 字节串属性实现
 //
@@ -530,11 +630,34 @@ bool StunUint32Attribute::read(rtc::ByteBufferReader* buf) {
 StunByteStringAttribute::StunByteStringAttribute(uint16_t type, uint16_t length) :
     StunAttribute(type, length) {}
 
+StunByteStringAttribute::StunByteStringAttribute(uint16_t type, const std::string& str) :
+    StunAttribute(type, 0)
+{
+    copy_bytes(str.c_str(), str.size());
+}
+
 StunByteStringAttribute::~StunByteStringAttribute() {
     if (_bytes) {
         delete []_bytes;
         _bytes = nullptr;
     }
+}
+
+// 替换属性 value: 释放旧 _bytes，复制新数据，更新 _length
+// 用于 _add_message_integrity_of_type 中: 先占位 '0'*20，HMAC 算出后替换
+void StunByteStringAttribute::copy_bytes(const char* bytes, size_t len) {
+    char* new_bytes = new char[len];
+    memcpy(new_bytes, bytes, len);
+    _set_bytes(new_bytes);
+    set_length(len);
+}
+
+// 安全替换内部字节指针: 先 delete[] 旧值，再赋值新指针
+void StunByteStringAttribute::_set_bytes(char* bytes) {
+    if (_bytes) {
+        delete[] _bytes;
+    }
+    _bytes = bytes;
 }
 
 // read: 从 buf 中读取 length() 字节到 _bytes，然后消费 padding
@@ -547,6 +670,14 @@ bool StunByteStringAttribute::read(rtc::ByteBufferReader* buf) {
     // 消费属性 value 的填充字节 (不足 4 倍数的补齐部分)
     consume_padding(buf);
 
+    return true;
+}
+
+
+// 写入 value 字节，然后填充 0 使总长度对齐到 4 的倍数
+bool StunByteStringAttribute::write(rtc::ByteBufferWriter* buf) {
+    buf->WriteBytes(_bytes, length());
+    write_padding(buf);
     return true;
 }
 

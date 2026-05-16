@@ -77,7 +77,15 @@ enum StunAttributeType {
 enum StunErrorCode {
     STUN_ERROR_BAD_REQUEST = 400,
     STUN_ERROR_UNATHORIZED = 401,
-    STUN_ERROR_SERVER_ERROR = 402
+    STUN_ERROR_SERVER_ERROR = 500
+};
+
+// STUN 地址属性中的 Address Family 字段 (1 字节)
+// 对应系统 AF_INET/AF_INET6，STUN 协议用 0x01=IPv4, 0x02=IPv6
+enum StunAddressFamily {
+    STUN_ADDRESS_UNDEF = 0,
+    STUN_ADDRESS_IPV4 = 1,
+    STUN_ADDRESS_IPV6 = 2
 };
 
 extern const char STUN_ERROR_REASON_BAD_REQUEST[];
@@ -132,6 +140,10 @@ public:
     // 从 ByteBufferReader 中读取并解析完整 STUN 消息 (头部 + 所有属性)
     bool read(rtc::ByteBufferReader* buf);
 
+    // 将 StunMessage 序列化为 STUN 二进制格式写入 buf
+    // 头部 (type + length + magic_cookie + transaction_id) 后依次写入每个属性的 TLV
+    bool write(rtc::ByteBufferWriter* buf) const;
+
     void add_attribute(std::unique_ptr<StunAttribute> attr);
 
     // --- 访问器 ---
@@ -168,6 +180,12 @@ private:
     bool _validate_message_integrity_of_type(uint16_t mi_attr_type,
         size_t mi_attr_size, const char* data, size_t size,
         const std::string& password);
+    
+    // 构造 MESSAGE-INTEGRITY: 先写入占位属性，序列化整条消息，再计算 HMAC 替换占位符
+    // attr_type / attr_size: 属性类型和 value 长度 (0x0008 / 20)
+    // key / len: ice_pwd 密钥
+    bool _add_message_integrity_of_type(uint16_t attr_type, uint16_t attr_size,
+        const char* key, size_t len); 
 
 private:
     uint16_t _type;                                 // 消息类型 (方法 + class)
@@ -188,8 +206,11 @@ public:
 
     // 属性类型 ID (如 USERNAME=0x0006)
     int type() const { return _type; }
+    void set_type(uint16_t type) { _type = type; }
+
     // 属性 value 的字节数 (不含 padding)
     size_t length() const { return _length; }
+    void set_length(uint16_t length) { _length = length; }
 
     // 工厂方法: 根据 value_type 创建具体的 StunAttribute 子类
     // owner 参数保留用于未来扩展 (如访问 StunMessage 的上下文)
@@ -199,6 +220,8 @@ public:
     // 从 ByteBufferReader 中读取属性 value (子类实现)
     virtual bool read(rtc::ByteBufferReader* buf) = 0;
 
+    virtual bool write(rtc::ByteBufferWriter* buf) = 0;
+
 protected:
     // 构造函数 protected — 只允许子类调用
     StunAttribute(uint16_t type, uint16_t length);
@@ -207,6 +230,9 @@ protected:
     // RFC 5389: 属性 value 长度必须是 4 的倍数, 不足则填充 0
     void consume_padding(rtc::ByteBufferReader* buf);
 
+    // 写入 0 填充字节使 value 长度达到 4 的倍数 (RFC 5389 §15)
+    void write_padding(rtc::ByteBufferWriter* buf);
+
 private:
     uint16_t _type;
     uint16_t _length;
@@ -214,11 +240,21 @@ private:
 
 class StunAddressAttribute : public StunAttribute {
 public:
+    static const size_t SIZE_UNDEF = 0;
+    static const size_t SIZE_IPV4 = 8;
+    static const size_t SIZE_IPV6 = 20;
+
     StunAddressAttribute(uint16_t type, const rtc::SocketAddress& addr);
     ~StunAddressAttribute() {}
 
+    // 根据地址族 (IPv4/IPv6) 自动设置属性的 value 长度
+    void set_address(const rtc::SocketAddress& addr);
+    // 将系统 AF_INET/AF_INET6 映射为 STUN Address Family
+    StunAddressFamily family();
+
     bool read(rtc::ByteBufferReader* buf) override;
 
+    bool write(rtc::ByteBufferWriter* buf) override;
 private:
     rtc::SocketAddress _address;
 };
@@ -227,6 +263,8 @@ class StunXorAddressAttribute : public StunAddressAttribute {
 public:
     StunXorAddressAttribute(uint16_t type, const rtc::SocketAddress& addr);
     ~StunXorAddressAttribute() {}
+
+    bool write(rtc::ByteBufferWriter* buf) override;
 };
 
 // ============================================================================
@@ -245,6 +283,8 @@ public:
     // 从 buf 中读取 4 字节到 _bits
     bool read(rtc::ByteBufferReader* buf) override;
 
+    bool write(rtc::ByteBufferWriter* buf) override;
+
 private:
     uint32_t _bits;
 };
@@ -255,12 +295,22 @@ private:
 class StunByteStringAttribute : public StunAttribute {
 public:
     StunByteStringAttribute(uint16_t type, uint16_t length);
+    StunByteStringAttribute(uint16_t type, const std::string& str);
     ~StunByteStringAttribute() override;
+
+    // 复制 bytes 到 _bytes (先释放旧值再分配新内存)
+    // 同时更新 _length，用于 MI 验证通过后替换占位 HMAC 值为真实值
+    void copy_bytes(const char* bytes, size_t len);
 
     // 从 buf 中读取 length() 字节到 _bytes
     bool read(rtc::ByteBufferReader* buf) override;
 
+    bool write(rtc::ByteBufferWriter* buf) override;
+
     std::string get_string() const { return std::string(_bytes, length()); }
+
+private:
+    void _set_bytes(char* bytes);
 
 private:
     char* _bytes = nullptr;
