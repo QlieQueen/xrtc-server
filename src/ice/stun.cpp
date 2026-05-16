@@ -3,6 +3,7 @@
 #include <rtc_base/byte_order.h>
 #include <rtc_base/crc32.h>
 #include <rtc_base/message_digest.h>
+#include <rtc_base/logging.h>
 
 namespace xrtc {
 
@@ -52,7 +53,7 @@ StunMessage::~StunMessage() = default;
 // RFC 5389 第 15.5 节规定:
 //   1. FINGERPRINT 必须是消息的最后一个属性
 //   2. CRC32 计算范围: 从消息头开始，到 FINGERPRINT 属性之前结束 (不含 FINGERPRINT 属性本身)
-//   3. 计算公式: CRC32(data, len - 8) ^ 0x5354554E == fingerprint_value
+//   3. 计算公式: CRC32(data, len - (header_size + mi_attr_value_size)) ^ 0x5354554E == fingerprint_value
 //
 // 校验步骤:
 //   1. 长度检查: 必须是 4 的倍数 + 至少包含一个 FINGERPRINT 属性
@@ -107,8 +108,28 @@ bool StunMessage::validate_fingerprint(const char* data, size_t len) {
         rtc::ComputeCrc32(data, len - fingerprint_attr_size);
 }
 
-void StunMessage::add_fingerprint() {
+bool StunMessage::add_fingerprint() {
+    // 1. 创建占位属性: value=0 (后续计算 CRC32 后替换)
+    auto fingerprint_attr_ptr = std::make_unique<StunUint32Attribute>(
+        STUN_ATTR_FINGERPRINT, 0);
 
+    // 2. 保存裸指针 — move 后 unique_ptr 所有权转移，但裸指针仍有效
+    StunUint32Attribute* fingerprint_origin_ptr = fingerprint_attr_ptr.get();
+    add_attribute(std::move(fingerprint_attr_ptr));
+
+    // 3. 序列化整条消息
+    rtc::ByteBufferWriter buf;
+    if (!write(&buf)) {
+        return false;
+    }
+
+    // 4. CRC32 计算范围: 从消息头到 FINGERPRINT 属性之前 (不含 FINGERPRINT 自身)
+    size_t msg_len_for_crc32 = buf.Length() - k_stun_attribute_header_size
+        - fingerprint_origin_ptr->length();
+    uint32_t c = rtc::ComputeCrc32(buf.Data(), msg_len_for_crc32);
+    // 5. XOR 替换占位值
+    fingerprint_origin_ptr->set_value(c ^ STUN_FINGERPRINT_XOR_VALUE);
+    return true;
 }
 
 // ============================================================================
@@ -163,7 +184,7 @@ bool StunMessage::add_message_integrity(const std::string& password) {
 // 流程: 创建 20 字节占位属性 → 加入消息 → 序列化整条消息到 buffer
 // 注意: commit 10 会在序列化后计算 HMAC 并替换占位符
 bool StunMessage::_add_message_integrity_of_type(uint16_t attr_type, uint16_t attr_size,
-        const char* key, size_t len)
+        const char* key, size_t key_len)
 {
     // 1. 创建占位属性: 20 字节 '0' (后续 commit 会用真实 HMAC 替换)
     auto mi_attr_ptr = std::make_unique<StunByteStringAttribute>(attr_type,
@@ -173,11 +194,25 @@ bool StunMessage::_add_message_integrity_of_type(uint16_t attr_type, uint16_t at
     StunByteStringAttribute* mi_attr_origin_ptr = mi_attr_ptr.get();
     add_attribute(std::move(mi_attr_ptr));
 
-    // 3. 序列化整条消息 (header + 所有属性)
+    // 3. 序列化整条消息 (header + 目前插入的所有属性)
     rtc::ByteBufferWriter buf;
     if (!write(&buf)) {
         return false;
     }
+
+    uint32_t msg_len_for_hmac = buf.Length() - k_stun_attribute_header_size -
+        mi_attr_origin_ptr->length();
+    char hmac[attr_size] = {0};
+    if (rtc::ComputeHmac(rtc::DIGEST_SHA_1, 
+        key, key_len, buf.Data(), msg_len_for_hmac, hmac, attr_size)
+        != attr_size)
+    {
+        RTC_LOG(LS_WARNING) << "compute hmac error";
+        return false;
+    }
+    mi_attr_origin_ptr->copy_bytes(hmac, attr_size);
+    _password.assign(key, key_len);
+    _integrity = IntegrityStatus::k_integrity_ok;
 
     return true;
 }
@@ -579,7 +614,44 @@ bool StunAddressAttribute::read(rtc::ByteBufferReader* buf) {
     return true;
 }
 
+/*
+ 0                   1                   2                   3
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|X X X X X X X X|    Family     |            Port               |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                                                               |
+|                 Address (32 bits for IPv4)                    |
+|                                                               |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+*/
 bool StunAddressAttribute::write(rtc::ByteBufferWriter* buf) {
+    StunAddressFamily stun_family = family();
+    if (stun_family == STUN_ADDRESS_UNDEF) {
+        RTC_LOG(LS_WARNING) << "write address attribute error: unknown family";
+        return false;
+    }
+
+    buf->WriteUInt8(0);
+    buf->WriteUInt8(stun_family);
+    buf->WriteUInt16(_address.port());
+
+    switch (_address.family()) {
+        case AF_INET: {
+            in_addr v4addr = _address.ipaddr().ipv4_address();
+            buf->WriteBytes((const char*)&v4addr, sizeof(v4addr));
+            break;
+
+        }
+        case AF_INET6: {
+            in6_addr v6addr = _address.ipaddr().ipv6_address();
+            buf->WriteBytes((const char*)&v6addr, sizeof(v6addr));
+            break;
+        }
+        default:
+            return false;
+            break;
+    }
+
     return true;
 }
 
@@ -592,7 +664,57 @@ StunXorAddressAttribute::StunXorAddressAttribute(uint16_t type,
 
 
 bool StunXorAddressAttribute::write(rtc::ByteBufferWriter* buf) {
+    StunAddressFamily stun_family = family();
+    if (stun_family == STUN_ADDRESS_UNDEF) {
+        RTC_LOG(LS_WARNING) << "write address attribute error: unknown family";
+        return false;
+    }
+
+    rtc::IPAddress xored_ip = _get_xored_ip();
+    if (xored_ip.family() == AF_UNSPEC) {
+        return false;
+    }
+
+    buf->WriteUInt8(0);
+    buf->WriteUInt8(stun_family);
+    // 异或magic_cookie的高16位
+    buf->WriteUInt16(_address.port() ^ (k_stun_magic_cookie) >> 16);
+
+    switch (_address.family()) {
+        case AF_INET: {
+            in_addr v4addr = xored_ip.ipv4_address();
+            buf->WriteBytes((const char*)&v4addr, sizeof(v4addr));
+            break;
+
+        }
+        case AF_INET6: {
+            in6_addr v6addr = xored_ip.ipv6_address();
+            buf->WriteBytes((const char*)&v6addr, sizeof(v6addr));
+            break;
+        }
+        default:
+            return false;
+            break;
+    }
+
     return true;
+}
+
+rtc::IPAddress StunXorAddressAttribute::_get_xored_ip() {
+    rtc::IPAddress ip = _address.ipaddr();
+    switch (_address.family()) {
+        case AF_INET: {
+            in_addr v4addr = ip.ipv4_address();
+            v4addr.s_addr = (v4addr.s_addr ^ rtc::HostToNetwork32(k_stun_magic_cookie));
+            return rtc::IPAddress(v4addr);
+        }
+        case AF_INET6:
+            // no support yet
+            break;
+        default:
+            break;
+    }
+    return rtc::IPAddress();
 }
 
 // ============================================================================

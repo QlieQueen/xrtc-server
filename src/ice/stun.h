@@ -131,7 +131,7 @@ public:
     // 检查 FINGERPRINT 属性的 CRC32 值是否合法
     // 这是最快速的合法性检查，能过滤掉绝大部分非法包
     static bool validate_fingerprint(const char* data, size_t len);
-    void add_fingerprint();
+    bool add_fingerprint();
 
     IntegrityStatus validate_message_integrity(const std::string& password);
     bool add_message_integrity(const std::string& password);
@@ -255,7 +255,7 @@ public:
     bool read(rtc::ByteBufferReader* buf) override;
 
     bool write(rtc::ByteBufferWriter* buf) override;
-private:
+protected:
     rtc::SocketAddress _address;
 };
 
@@ -265,6 +265,8 @@ public:
     ~StunXorAddressAttribute() {}
 
     bool write(rtc::ByteBufferWriter* buf) override;
+private:
+    rtc::IPAddress _get_xored_ip();
 };
 
 // ============================================================================
