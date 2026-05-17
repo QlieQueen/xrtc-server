@@ -13,7 +13,8 @@ IceTransportChannel::IceTransportChannel(EventLoop* el, PortAllocator* alloctor,
     _el(el),
     _transport_name(transport_name),
     _alloctor(alloctor),
-    _component(component)
+    _component(component),
+    _ice_controller(std::make_unique<IceController>(this))
 {
     RTC_LOG(LS_INFO) << "ice transport channel created, transport_name: " << _transport_name
         << ", component: " << component;
@@ -30,10 +31,20 @@ IceTransportChannel::~IceTransportChannel() {
 }
 
 void IceTransportChannel::set_ice_params(const IceParameters& ice_params) {
+    RTC_LOG(LS_INFO) << "set gathering ICE param"
+        << ", transport_name: " << _transport_name
+        << ", component: " << _component
+        << ", ufrag: " << ice_params.ice_ufrag
+        << ", pwd: " << ice_params.ice_pwd;
     _ice_params = ice_params;
 }
 
 void IceTransportChannel::set_remote_ice_params(const IceParameters& remote_ice_params) {
+    RTC_LOG(LS_INFO) << "set remote ICE param"
+        << ", transport_name: " << _transport_name
+        << ", component: " << _component
+        << ", ufrag: " << remote_ice_params.ice_ufrag
+        << ", pwd: " << remote_ice_params.ice_pwd;
     _remote_ice_params = remote_ice_params;
 }
 
@@ -129,8 +140,54 @@ void IceTransportChannel::_on_unknown_address(UDPPort* port,
 
     RTC_LOG(LS_INFO) << to_string() << ": create connection from "
         << "peer reflexive candidate success, remote_addr: " << addr.ToString();
-    
+
+    // 注册到 controller → 回复 binding request → 更新状态并可能启动 ping
+    _add_connection(conn);
+
     conn->handle_stun_binding_request(stun_msg);
+
+    _sort_connections_and_update_state();
+}
+
+// ============================================================================
+// IceTransportChannel::_add_connection — 注册连接到 controller
+//
+// 新创建的 IceConnection 注册到 IceController，后续参与 ping 决策和排序。
+// ============================================================================
+void IceTransportChannel::_add_connection(IceConnection* conn) {
+    _ice_controller->add_connection(conn);
+}
+
+// ============================================================================
+// IceTransportChannel::_sort_connections_and_update_state — 排序连接并更新状态
+//
+// 连接发生变化时（新增/状态变更）调用:
+//   1. _maybe_start_pinging — 可能首次启动连通性检查
+//   2. 后续 commit: _maybe_switch_selected_connection — 可能切换最优连接
+//   3. 后续 commit: _update_state — 更新 channel 的聚合状态
+// ============================================================================
+void IceTransportChannel::_sort_connections_and_update_state() {
+    _maybe_start_pinging();
+}
+
+// ============================================================================
+// IceTransportChannel::_maybe_start_pinging — 条件满足时启动连通性检查
+//
+// 连通性检查只会启动一次 (_start_pinging 防止重复启动)。
+// 启动条件: 存在可 ping 的连接 (对端凭据已知 + channel weak)。
+// 启动后会在后续 commit 中开启定时器，按策略周期发送 STUN binding request。
+// ============================================================================
+void IceTransportChannel::_maybe_start_pinging() {
+    // 连通性检查只启动一次
+    if (_start_pinging) {
+        return;
+    }
+
+    if (_ice_controller->has_pingable_connection()) {
+        RTC_LOG(LS_INFO) << to_string() << ": Have a pingable connection "
+            << "for the first time, starting to ping";
+        // todo: 启动定时器 (后续 commit)
+    }
 }
 
 std::string IceTransportChannel::to_string() {

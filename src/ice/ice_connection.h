@@ -25,6 +25,14 @@ namespace xrtc {
 // ============================================================================
 class IceConnection {
 public:
+    // 写状态 — 衡量"我们→对端是否畅通"（ping 回复率）
+    enum WriteState {
+        STATE_WRITABLE = 0,         // ping 能收到回复，连接健康
+        STATE_WRITE_UNRELIABLE = 1, // 少量 ping 未收到回复，不稳定
+        STATE_WRITE_INIT = 2,       // 初始状态，尚未收到 ping 回复
+        STATE_WRITE_TIMEOUT = 3,    // 大量 ping 无回复，连接已死
+    };
+
     IceConnection(EventLoop* el, UDPPort* port, const Candidate& remote_candidate);
     ~IceConnection();
 
@@ -35,12 +43,21 @@ public:
     void send_response_message(const StunMessage& response);
 
     void on_read_packet(const char* buf, size_t len, int64_t ts);
+
+    // 读写状态查询 — 用于 Controller 的 ping 决策和 Channel 的状态聚合
+    bool writable() { return _write_state == STATE_WRITABLE; }
+    bool receiving() { return _receiving; }
+    bool weak() { return !(writable() && receiving()); }   // 双向都通才不是 weak
+    bool active() { return _write_state != STATE_WRITE_TIMEOUT; }  // 没超时就是活跃的
     
     std::string to_string();
 private:
     EventLoop* _el;
     UDPPort* _port;
     Candidate _remote_candidate;
+
+    WriteState _write_state = STATE_WRITE_INIT;
+    bool _receiving = false;
 };
 
 } // namespace xrtc

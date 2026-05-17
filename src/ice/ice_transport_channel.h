@@ -10,6 +10,7 @@
 #include "ice/candidate.h"
 #include "ice/ice_credentials.h"
 #include "ice/udp_port.h"
+#include "ice/ice_controller.h"
 
 
 namespace xrtc {
@@ -35,7 +36,13 @@ public:
 
 private:
     void _on_unknown_address(UDPPort* port,
-            const rtc::SocketAddress& addr, StunMessage* stun_msg, const std::string& remote_ufrag);
+            const rtc::SocketAddress& addr,
+            StunMessage* stun_msg,
+            const std::string& remote_ufrag);
+    void _add_connection(IceConnection* conn);
+    void _sort_connections_and_update_state();
+    void _maybe_start_pinging();
+
 private:
     EventLoop* _el;
     std::string _transport_name;
@@ -45,6 +52,8 @@ private:
     IceParameters _remote_ice_params;
     std::vector<Candidate> _local_candidates;
     std::vector<UDPPort*> _ports;
+    std::unique_ptr<IceController> _ice_controller;  // 连接选择器: 决定 ping 谁、选谁
+    bool _start_pinging = false;                     // 连通性检查是否已启动 (只启动一次)
 };
 
 

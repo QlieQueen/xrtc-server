@@ -176,7 +176,7 @@ bool UDPPort::get_stun_message(const char* data, size_t len,
         std::string local_ufrag;
         std::string remote_ufrag;
         if (!_parse_stun_username(stun_msg.get(), &local_ufrag, &remote_ufrag) ||
-            local_ufrag == _ice_params.ice_ufrag)
+            local_ufrag != _ice_params.ice_ufrag)
         {
             RTC_LOG(LS_WARNING) << to_string() << ": received "
                 << stun_method_to_string(stun_msg->type())
