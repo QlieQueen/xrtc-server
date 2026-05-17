@@ -23,7 +23,7 @@ When guiding the user through implementing a new feature or commit, **always sta
 
 ## Background Documentation Rules (CRITICAL)
 
-When writing background/technical documentation (e.g., `note/phase*-background.md`), **every technical detail must be derived from and verified against the reference project's actual source code** (`/home/ydqun/workspace/lession/xrtcserver/src/`), never from training data "memory" or assumptions.
+When writing background/technical documentation (e.g., `note/phase*-background.md`), **every technical detail must be derived from and verified against the reference project's actual source code** (`/home/ydqun/workspace/webrtc/xrtcserver/src/`), never from training data "memory" or assumptions.
 
 Concrete example of what went wrong:
 - **STUN Message Type bit layout**: I drew `|0 0|M|M M|M|M M|C|M|M M|C|C|C|` from training data memory — completely fabricated.
@@ -190,3 +190,33 @@ Parsed via `yaml-cpp` into `GeneralConf` / `SignalingServerOptions` / `RtcServer
 - Tests use `#define private public` before including headers to access internals
 - Tests run from project root (CMake sets WORKING_DIRECTORY)
 - Both pure-logic tests (no event loop) and integration tests (with thread start/stop)
+
+## Phase Progress
+
+| Phase | 内容 | 状态 | 最新 commit |
+|-------|------|------|-------------|
+| 1 | TCP xhead 解析 + JSON body | ✅ | — |
+| 2 | 跨线程路由 | ✅ | — |
+| 3 | SDP offer 生成 | ✅ | — |
+| 4 | UDPPort + Candidate | ✅ | — |
+| 5 | DTLS fingerprint | ✅ | — |
+| 6 | PeerConnection + TransportController | ✅ | — |
+| 7 | ANSWER + set_remote_sdp | ✅ | — |
+| 8 | STUN 消息编解码 | ✅ | `d3ca1b3` |
+| **9** | **ICE 连接状态机 + Controller** | **WIP** | `9c3f92a` |
+| 10 | DTLS 握手 + SRTP | pending | — |
+| 11 | PC/ICE/Agent 状态聚合 | pending | — |
+| 12 | PULL 流 + STOP 命令 | pending | — |
+| 13 | RTP/RTCP 数据转发 | pending | — |
+| 14 | 异常处理 + 完整联调 | pending | — |
+
+### Phase 9 当前进度
+
+- **参考项目**: `/home/ydqun/workspace/webrtc/xrtcserver`, commits `a0bdda8` → `9bb997d` (21 个)
+- **已完成**: 4/21 commits
+  - ✅ commit 1: UDP 高性能发送 (用户提前实现)
+  - ✅ commit 2: ICE 连接保活 (用户提前实现)
+  - ✅ `1.5.52`: StunErrorCodeAttribute + send_binding_error_response (commit 3)
+  - ✅ `1.5.53`: IceController + WriteState + 连通性检查首次启动 (commit 4)
+- **下一步**: commit 5 `97afa2c` — ICE 传输通道 ping 周期 (timestamp 追踪)
+- **知识文档**: `note/phase9-background.md`, `note/phase9-connectivity-check-concepts.md`
