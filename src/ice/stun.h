@@ -62,12 +62,14 @@ const size_t k_stun_message_integrity_size = 20;   // mi属性的value的长度
 enum StunMessageType {
     STUN_BINDING_REQUEST  = 0x0001,  // Binding 请求: method=Binding(0x001) + class=Request(0x000)
     STUN_BINDING_RESPONSE = 0x0101,
+    STUN_BINDING_ERROR_RESPONSE = 0x0111,
 };
 
 // --- STUN 属性类型 (attr_type, RFC 5389 第 18 节) ---
 enum StunAttributeType {
     STUN_ATTR_USERNAME           = 0x0006,   // 用户名: local_ufrag:remote_ufrag
     STUN_ATTR_MESSAGE_INTEGRITY  = 0x0008,   // 消息完整性: HMAC-SHA1(key=ice_pwd, data=message)
+    STUN_ATTR_ERROR_CODE         = 0x0009,
     STUN_ATTR_XOR_MAPPED_ADDRESS = 0x0020,
     STUN_ATTR_PRIORITY           = 0X0024,
     STUN_ATTR_FINGERPRINT        = 0x8028,   // 指纹: CRC32(message) ^ 0x5354554E
@@ -111,6 +113,7 @@ std::string stun_method_to_string(int type);
 class StunAttribute;
 class StunByteStringAttribute;
 class StunUint32Attribute;
+class StunErrorCodeAttribute;
 
 // ============================================================================
 // StunMessage — STUN 消息的编码/解码
@@ -216,6 +219,7 @@ public:
     // owner 参数保留用于未来扩展 (如访问 StunMessage 的上下文)
     static StunAttribute* create(StunAttributeValueType value_type,
             uint16_t type, uint16_t length, void* owner);
+    static std::unique_ptr<StunErrorCodeAttribute> create_error_code();
 
     // 从 ByteBufferReader 中读取属性 value (子类实现)
     virtual bool read(rtc::ByteBufferReader* buf) = 0;
@@ -317,6 +321,34 @@ private:
 private:
     char* _bytes = nullptr;
 };
+
+/*
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|          Reserved (21 bits)           |C C C|   Number (8)    |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|      Reason Phrase (variable)                                ...
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+*/
+class StunErrorCodeAttribute : public StunAttribute {
+public:
+    static const uint16_t MIN_SIZE;
+    StunErrorCodeAttribute(uint16_t type, uint16_t length);
+    ~StunErrorCodeAttribute() override = default;
+
+    void set_code(int code);
+    void set_reason(const std::string& reason);
+
+    bool read(rtc::ByteBufferReader* buf) override;
+    bool write(rtc::ByteBufferWriter* buf) override; 
+
+private:
+    uint8_t _class;
+    uint8_t _number;
+    std::string _reason;
+};
+
 
 } // namespace xrtc
 

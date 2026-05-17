@@ -7,9 +7,9 @@ description: "消息流程 + commit-by-commit 方式教学，手写实现 WebRTC
 
 ## 仓库路径
 
-- **你的 xrtc-server**：`/home/ydqun/workspace/lession/xrtc-server`
-- **参考项目 xrtcserver**：`/home/ydqun/workspace/lession/xrtcserver`
-- **背景笔记**：`/home/ydqun/workspace/lession/xrtc-server/note/`
+- **你的 xrtc-server**：`/home/ydqun/workspace/webrtc/xrtc-server`
+- **参考项目 xrtcserver**：`/home/ydqun/workspace/webrtc/xrtcserver`
+- **背景笔记**：`/home/ydqun/workspace/webrtc/xrtc-server/note/`
 - **参考起始 commit**：`ca762a97`
 
 ## 教学方式
@@ -32,8 +32,8 @@ description: "消息流程 + commit-by-commit 方式教学，手写实现 WebRTC
 | 5 | DTLS fingerprint 填入 SDP | ✅ done | — |
 | 6 | PeerConnection + TransportController | ✅ done | — |
 | 7 | ANSWER + set_remote_sdp | ✅ done | — |
-| **8** | **STUN 消息编解码** | **WIP** | `7012b73` → `c18f33d` (10 commits) |
-| 9 | ICE 连接状态机 + Controller | pending | `a0bdda8` → `9bb997d` |
+| 8 | STUN 消息编解码 | ✅ done | `7012b73` → `c18f33d` (11 commits) |
+| **9** | **ICE 连接状态机 + Controller** | **WIP** | `a0bdda8` → `9bb997d` (21 commits) |
 | 10 | DTLS 握手 + SRTP | pending | `b01ce7f` → `092c650` |
 | 11 | PC/ICE/Agent 状态聚合 | pending | `86a58c9` → `fc5ae77` |
 | 12 | PULL 流 + STOP 命令 | pending | `5a0f518` → `84b1752` |
@@ -56,6 +56,32 @@ description: "消息流程 + commit-by-commit 方式教学，手写实现 WebRTC
 | 10 | `ef60ffe` | 添加 FINGERPRINT 到响应 |
 | 11 | `c18f33d` | 发送 binding 响应 |
 
+## Phase 9 commit 清单
+
+| # | commit | 内容 |
+|---|--------|------|
+| 1 | `a0bdda8` | UDP 包高性能发送（你的 `_send_data_from_list` 已做） |
+| 2 | `af25839` | ICE 连接保活 — 定时检查连接是否超时 |
+| 3 | `da9e320` | 发送 STUN 错误响应消息 |
+| 4 | `89b5985` | 服务侧连通性检查 — `_on_check_and_ping()` |
+| 5 | `97afa2c` | ICE 传输通道 ping 周期 — timestamp 追踪 |
+| 6 | `d95f7ea` | ICE 连接 ping 优先级选择 |
+| 7 | `c365708` | 选择一个连接执行 ping 请求 |
+| 8 | `410644e` | 构造 STUN 绑定请求（ConnectionRequest::prepare） |
+| 9 | `6225d4f` | ICE 普通提名和积极提名 |
+| 10 | `183ca73` | 发送 STUN ping 请求 |
+| 11 | `c90a868` | 处理 STUN 响应（RTT 计算） |
+| 12 | `3710be1` | 输出 RTT 和 ping id |
+| 13 | `d26dce4` | 更新 Ice 连接读写状态 |
+| 14 | `f017815` | 选中连接切换策略 |
+| 15 | `cb60f45` | 切换策略考虑连接优先级 |
+| 16 | `722f876` | 开始切换 selected 连接 |
+| 17 | `a60d5ee` | STUN 请求错误响应处理 |
+| 18 | `b808117` | 设置 Candidate pair 状态 |
+| 19 | `63b5f45` | 处理 ICE ping 周期问题 |
+| 20 | `9bc4471` | ICE 连接探活机制 |
+| 21 | `9bb997d` | 更新 ICE 传输通道状态 |
+
 ## 参考文件速查
 
 每个 Phase 用到的参考代码：
@@ -63,7 +89,7 @@ description: "消息流程 + commit-by-commit 方式教学，手写实现 WebRTC
 | Phase | 参考文件（在 xrtcserver/src/ 下）|
 |-------|-------------------------------|
 | 8 | `ice/stun.h`, `ice/stun.cpp`, `ice/udp_port.h`, `ice/udp_port.cpp` |
-| 9 | `ice/ice_connection.h/.cpp`, `ice/ice_controller.h/.cpp`, `ice/stun_request.h/.cpp`, `ice/ice_transport_channel.h/.cpp`, `ice/ice_agent.h/.cpp` |
+| 9 | `ice/ice_connection.h/.cpp`, `ice/ice_controller.h/.cpp`, `ice/ice_transport_channel.h/.cpp`, `ice/ice_agent.h/.cpp`, `ice/stun_request.h/.cpp` |
 | 10 | `pc/dtls_transport.h/.cpp`, `pc/dtls_srtp_transport.h/.cpp`, `pc/srtp_session.h/.cpp`, `pc/srtp_transport.h/.cpp` |
 | 11 | `pc/peer_connection.h/.cpp`, `ice/ice_transport_channel.h/.cpp`, `ice/ice_agent.h/.cpp` |
 | 12 | `stream/pull_stream.h/.cpp`, `stream/rtc_stream_manager.h/.cpp`, `server/rtc_worker.cpp` |

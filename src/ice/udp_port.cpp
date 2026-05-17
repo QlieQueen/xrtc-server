@@ -176,7 +176,7 @@ bool UDPPort::get_stun_message(const char* data, size_t len,
         std::string local_ufrag;
         std::string remote_ufrag;
         if (!_parse_stun_username(stun_msg.get(), &local_ufrag, &remote_ufrag) ||
-            local_ufrag != _ice_params.ice_ufrag)
+            local_ufrag == _ice_params.ice_ufrag)
         {
             RTC_LOG(LS_WARNING) << to_string() << ": received "
                 << stun_method_to_string(stun_msg->type())
@@ -256,16 +256,59 @@ std::string UDPPort::to_string() {
 
 
 // ============================================================================
-// UDPPort::send_binding_error_response — 发送 STUN 错误响应
+// UDPPort::send_binding_error_response — 发送 STUN Error Response
 //
-// 目前为空实现，后续 commit 会填充: 构造 STUN Error Response 并通过 UDP 发送
+// 调用时机: get_stun_message() 中校验失败时 (缺少属性 / ufrag 不匹配 / MI 无效)
+//
+// RFC 5389 第 7.3 节: 错误响应包含:
+//   1. ERROR-CODE 属性 (class * 100 + number, 如 401 = 4*100 + 1)
+//   2. 非 400/401 错误时附加 MESSAGE-INTEGRITY (因为有共享密钥)
+//   3. FINGERPRINT (CRC32 校验)
 // ============================================================================
 void UDPPort::send_binding_error_response(StunMessage* stun_msg,
         const rtc::SocketAddress& addr,
         int err_code,
         const std::string& reason)
 {
-    // TODO: 后续 commit 实现
+    if (!_async_socket) {
+        return;
+    }
+
+    // 1. 构造 Error Response 消息头
+    StunMessage response;
+    response.set_type(STUN_BINDING_ERROR_RESPONSE);
+    response.set_transaction_id(stun_msg->transaction_id());
+
+    // 2. 创建并填充 ERROR-CODE 属性 (如 class=4, number=1 → 401 Unauthorized)
+    auto error_attr = StunAttribute::create_error_code();
+    error_attr->set_code(err_code);    // 拆分为 class = code/100, number = code%100
+    error_attr->set_reason(reason);    // 同时更新 _length = 4 + reason.size()
+    response.add_attribute(std::move(error_attr));
+
+    // 3. 非 400/401 错误附加 MESSAGE-INTEGRITY (Bad Request / Unauthorized 无共享密钥)
+    if (err_code != STUN_ERROR_BAD_REQUEST && err_code != STUN_ERROR_UNAUTHORIZED) {
+        response.add_message_integrity(_ice_params.ice_pwd);
+    }
+    response.add_fingerprint();
+
+    // 4. 序列化并发送
+    rtc::ByteBufferWriter buf;
+    if (!response.write(&buf)) {
+        return;
+    }
+
+    int ret = _async_socket->send_to(buf.Data(), buf.Length(), addr);
+    if (ret < 0) {
+        RTC_LOG(LS_WARNING) << to_string() << " send "
+            << stun_method_to_string(response.type())
+            << " error, ret=" << ret
+            << " to=" << addr.ToString();
+    } else {
+        RTC_LOG(LS_WARNING) << to_string() << " send "
+            << stun_method_to_string(response.type())
+            << ", reason=" << reason
+            << " to=" << addr.ToString();
+    }
 }
 
 // ============================================================================

@@ -28,6 +28,8 @@ std::string stun_method_to_string(int type) {
             return "BINDING REQUEST";
         case STUN_BINDING_RESPONSE:
             return "BINDING RESPONSE";
+        case STUN_BINDING_ERROR_RESPONSE:
+            return "BINDING ERROR RESPONSE";
         default:
             return "Unknown<" + std::to_string(type) + ">";
     }
@@ -548,6 +550,11 @@ StunAttribute* StunAttribute::create(StunAttributeValueType value_type,
     }
 }
 
+std::unique_ptr<StunErrorCodeAttribute> StunAttribute::create_error_code() {
+    return std::make_unique<StunErrorCodeAttribute>(
+        STUN_ATTR_ERROR_CODE, StunErrorCodeAttribute::MIN_SIZE);
+}
+
 // ============================================================================
 // StunAttribute::consume_padding — 消费填充字节
 //
@@ -801,6 +808,51 @@ bool StunByteStringAttribute::read(rtc::ByteBufferReader* buf) {
 // 写入 value 字节，然后填充 0 使总长度对齐到 4 的倍数
 bool StunByteStringAttribute::write(rtc::ByteBufferWriter* buf) {
     buf->WriteBytes(_bytes, length());
+    write_padding(buf);
+    return true;
+}
+
+// ============================================================================
+// StunErrorCodeAttribute — RFC 5389 第 15.6 节
+//
+// 属性格式 (4 + reason 长度):
+//   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//   |           Reserved (21 bits)           |Class|     Number    |
+//   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//   |      Reason Phrase (variable)                                ...
+//   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//
+// Class:  百位数字 (3 bits, 值 3-6)
+// Number: 十位+个位 (8 bits, 值 0-99)
+// 例: 401 → class=4, number=1, wire format = (4 << 8) | 1 = 0x0401
+//
+// MIN_SIZE = 4: Reserved(21) + Class(3) + Number(8) = 32 bits
+// ============================================================================
+
+const uint16_t StunErrorCodeAttribute::MIN_SIZE = 4;
+
+StunErrorCodeAttribute::StunErrorCodeAttribute(uint16_t type, uint16_t length) :
+    StunAttribute(type, length), _class(0), _number(0) {}
+
+void StunErrorCodeAttribute::set_code(int code) {
+    _class = code / 100;    // 百位: 401 / 100 = 4
+    _number = code % 100;   // 十位+个位: 401 % 100 = 1
+}
+
+void StunErrorCodeAttribute::set_reason(const std::string& reason) {
+    _reason = reason;
+    set_length(MIN_SIZE + reason.size());
+}
+
+bool StunErrorCodeAttribute::read(rtc::ByteBufferReader* buf) {
+    // todo: 错误响应是服务端发出的，暂时不需要解析
+    return false;
+}
+
+bool StunErrorCodeAttribute::write(rtc::ByteBufferWriter* buf) {
+    // wire format: 高 21 bits 为 0 (Reserved), bits 10-8 为 Class, bits 7-0 为 Number
+    buf->WriteUInt32(_class << 8 | _number);
+    buf->WriteString(_reason);
     write_padding(buf);
     return true;
 }
