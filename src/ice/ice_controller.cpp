@@ -37,6 +37,15 @@ void IceController::add_connection(IceConnection* conn) {
 //   1. 对端的 ice_ufrag 和 ice_pwd 必须已知 (否则无法构造 STUN 请求)
 //      STUN ping 可能比 SDP answer 更快到达，此时 remote_ice_params 尚未设置
 //   2. Channel 为 weak 状态 → 需要积极探测来找更好的连接
+//
+// 为什么每检查一个 conn 都要判断 _weak()？
+//   _weak() 检查的是 selected connection (当前用于发送数据的连接)，
+//   不是正在遍历的这个 conn。它是 channel 级别的"紧急信号"：
+//   - Channel 健康时: selected connection 双向通畅，不急于 ping，
+//     可以等 ping 间隔到了再发 (后续 commit 补充 _is_connection_past_ping_interval)
+//   - Channel weak 时: selected connection 断开或不存在，
+//     需要加速探测所有候选连接以尽快找到替代路径，
+//     此时跳过间隔限制，所有有凭据的连接都立即视为可 ping
 // ============================================================================
 bool IceController::_is_pingable(IceConnection* conn) {
     const Candidate& remote = conn->remote_candidate();
@@ -45,11 +54,12 @@ bool IceController::_is_pingable(IceConnection* conn) {
         return false;  // STUN ping 请求可能比 answer 更快到达服务端
     }
 
+    // channel weak = 紧急模式: 当前选中连接已断，需要积极探测找新路径
     if (_weak()) {
-        return true;   // channel weak → 需要积极连通性检查
+        return true;   // 跳过 ping 间隔限制，所有候选连接均可 ping
     }
 
-    return false;      // channel strong → 暂时不需要 ping
+    return false;      // channel strong → 按 ping 间隔限制 (后续 commit 补充)
 }
 
 } // namespace xrtc

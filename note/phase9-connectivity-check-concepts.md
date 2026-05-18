@@ -115,6 +115,29 @@ TIMEOUT    → active=false (死了，即 failed)
 
 第三条的含义：Channel weak 时，所有还活着（active）的连接（INIT / WRITABLE / UNRELIABLE）都应该被探测，看谁能变成可用的。只有已经超时死掉的（TIMEOUT / failed）才跳过 — ping 一个死连接没有意义。
 
+### 为什么 _is_pingable 里每次都检查 _weak()？
+
+`_weak()` 检查的是 `_selected_connection`（当前用于发送数据的连接）的 health，而不是正在遍历的那个 `conn`。它是 **channel 级别的紧急信号**。
+
+```
+_is_pingable(conn) 的逻辑:
+
+  对端凭据已知？
+    ├── 否 → 不可 ping
+    └── 是 → Channel weak？
+              ├── 是 → 紧急模式: 立即可 ping (跳过间隔限制)
+              └── 否 → 正常模式: 按 ping 间隔判断 (commit 6)
+```
+
+**设计意图**：
+
+| Channel 状态 | selected connection | ping 策略 | 原因 |
+|-------------|-------------------|----------|------|
+| strong | writable && receiving | 限速 ping | 当前路通畅，不急，减少 STUN 开销 |
+| weak | 断开或不存在 | 全速 ping | 当前路断了，需要尽快找到替代路径 |
+
+这是 ICE 协议的**快速恢复机制**：当 selected connection 故障时，不等待 ping 间隔到期，立即对所有候选连接发起探测，以最小化断连时间。
+
 ---
 
 ## 六、IceTransportChannel 的状态 — 6 个状态
