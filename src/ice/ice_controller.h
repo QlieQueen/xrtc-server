@@ -9,6 +9,14 @@ namespace xrtc {
 
 class IceTransportChannel;
 
+struct PingResult {
+    PingResult(const IceConnection* conn, int ping_interval) :
+        conn(conn), ping_interval(ping_interval) {}
+
+    const IceConnection* conn = nullptr;
+    int ping_interval = 0; // 下次channel ping的周期
+};
+
 // ============================================================================
 // IceController — ICE 连接选择策略
 //
@@ -33,6 +41,7 @@ public:
     void add_connection(IceConnection* conn);
     const std::vector<IceConnection*> connections() { return _connections; }
     bool has_pingable_connection();
+    PingResult select_connection_to_ping(int64_t last_ping_sent_ms);
 
 private:
     // channel weak = 没有 selected connection 或 selected connection 不通畅
@@ -41,11 +50,15 @@ private:
     }
 
     bool _is_pingable(IceConnection* conn);
+    const IceConnection* _find_next_pingable_connection(int64_t now);
+    bool _is_connection_past_ping_interval(const IceConnection* conn, int64_t now);
+    int _get_connection_ping_interval(const IceConnection* conn,   int64_t now);
 
 private:
     IceTransportChannel* _ice_channel;
     IceConnection* _selected_connection = nullptr;
     std::vector<IceConnection*> _connections;
+    int64_t _last_ping_sent_ms = 0;                    // channel 全局速率门: 上次发出 ping 的时间
 };
 
 } // namespace xrtc 

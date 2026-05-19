@@ -58,6 +58,8 @@ private:
     std::unique_ptr<IceController> _ice_controller;  // 连接选择器: 决定 ping 谁、选谁
     bool _start_pinging = false;                     // 连通性检查是否已启动 (只启动一次)
     TimerWatcher* _ping_watcher = nullptr;           // 周期性 ping 定时器 (libev repeating timer)
+    int _cur_ping_interval = WEAK_PING_INTERVAL;
+    int64_t _last_ping_sent_ms = 0;
 };
 
 

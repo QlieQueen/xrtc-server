@@ -45,14 +45,18 @@ public:
 
     void on_read_packet(const char* buf, size_t len, int64_t ts);
     // ANSWER 到达后，补填已有连接的对端密码 (ufrag 匹配则填入 pwd)
-void maybe_set_remote_ice_params(const IceParameters& ice_params);
+    void maybe_set_remote_ice_params(const IceParameters& ice_params);
 
     // 读写状态查询 — 用于 Controller 的 ping 决策和 Channel 的状态聚合
     bool writable() { return _write_state == STATE_WRITABLE; }
     bool receiving() { return _receiving; }
     bool weak() { return !(writable() && receiving()); }   // 双向都通才不是 weak
     bool active() { return _write_state != STATE_WRITE_TIMEOUT; }  // 没超时就是活跃的
-    
+    bool stable(int64_t now) const;
+
+    int64_t last_ping_sent() const { return _last_ping_sent; }
+    int num_pings_sent() const { return _num_pings_sent; }
+
     std::string to_string();
 private:
     EventLoop* _el;
@@ -61,6 +65,10 @@ private:
 
     WriteState _write_state = STATE_WRITE_INIT;
     bool _receiving = false;
+
+    int64_t _last_ping_sent = 0;
+    int _num_pings_sent = 0;
+
 };
 
 } // namespace xrtc

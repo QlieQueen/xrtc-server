@@ -211,25 +211,33 @@ void IceTransportChannel::_maybe_start_pinging() {
             << "for the first time, starting to ping";
         // 启动重复定时器，WEAK_PING_INTERVAL(48ms) * 1000 → 48000 usec
         // channel weak → 加速探测，每 48ms 触发一次 _on_check_and_ping
-        _el->start_timer(_ping_watcher, WEAK_PING_INTERVAL * 1000);
+        _el->start_timer(_ping_watcher, _cur_ping_interval * 1000);
         _start_pinging = true;
     }
 }
 
 
 // ============================================================================
-// IceTransportChannel::_on_check_and_ping — 周期性连通性检查入口 (TODO 后续 commit)
+// IceTransportChannel::_on_check_and_ping — 周期性连通性检查入口
 //
-// 由定时器 ice_ping_cb 回调触发，当前仅打印日志占位。
-// 后续 commit 将在此做:
-//   1. 从 controller 选择一个连接发送 STUN ping
-//   2. 检查连接超时
-//   3. 更新连接状态 (writable / receiving / timeout)
-//   4. 切换 selected connection
-//   5. 更新 channel 聚合状态
+// 由定时器 ice_ping_cb 回调触发 (周期 = _cur_ping_interval)。
+//
+// 流程:
+//   1. controller 选择本周期要 ping 的连接 + 返回新的 ping_interval
+//   2. 如果 interval 变化 (480ms↔48ms): 重启定时器
+//      - 降级 (strong→weak): 480ms→48ms, 立即加速探测
+//      - 升级 (weak→strong): 48ms→480ms, 节省带宽
+//   3. 后续 commit: 实际发送 STUN ping、检查超时、更新状态、切换连接
 // ============================================================================
 void IceTransportChannel::_on_check_and_ping() {
-    RTC_LOG(LS_WARNING) << "===================_on_check_and_ping";
+    auto result = _ice_controller->select_connection_to_ping(_last_ping_sent_ms);
+
+    // ping_interval 变化时重启定时器: 降级加速 / 升级减速
+    if (_cur_ping_interval != result.ping_interval) {
+        _cur_ping_interval = result.ping_interval;
+        _el->stop_timer(_ping_watcher);
+        _el->start_timer(_ping_watcher, _cur_ping_interval * 1000);
+    }
 }
 
 std::string IceTransportChannel::to_string() {

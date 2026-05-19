@@ -14,6 +14,11 @@ extern const int ICE_PWD_LENGTH;
 //   STRONG_PING_INTERVAL = 1000 * 480bit / 1000bps  = 480ms (channel strong → 节省带宽)
 extern const int WEAK_PING_INTERVAL;
 extern const int STRONG_PING_INTERVAL;
+extern const int STABLING_CONNECTION_PING_INTERVAL; // 900ms
+extern const int STABLE_CONNECTION_PING_INTERVAL; // 2500m
+
+
+extern const int MIN_PINGS_AT_WEAK_PING_INTERVAL;
 
 enum IceCandidateComponent {
     RTP = 1,
