@@ -9,6 +9,12 @@ namespace xrtc {
 extern const int ICE_UFRAG_LENGTH;
 extern const int ICE_PWD_LENGTH;
 
+// ICE ping 间隔 (ms)，由 STUN packet size 和目标带宽计算
+//   WEAK_PING_INTERVAL   = 1000 * 480bit / 10000bps = 48ms  (channel weak → 加速探测)
+//   STRONG_PING_INTERVAL = 1000 * 480bit / 1000bps  = 480ms (channel strong → 节省带宽)
+extern const int WEAK_PING_INTERVAL;
+extern const int STRONG_PING_INTERVAL;
+
 enum IceCandidateComponent {
     RTP = 1,
     RTCP = 2

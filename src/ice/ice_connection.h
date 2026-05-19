@@ -5,6 +5,7 @@
 #include "ice/udp_port.h"
 #include "ice/candidate.h"
 #include "ice/stun.h"
+#include "ice/ice_credentials.h"
 
 namespace xrtc {
 
@@ -43,6 +44,8 @@ public:
     void send_response_message(const StunMessage& response);
 
     void on_read_packet(const char* buf, size_t len, int64_t ts);
+    // ANSWER 到达后，补填已有连接的对端密码 (ufrag 匹配则填入 pwd)
+void maybe_set_remote_ice_params(const IceParameters& ice_params);
 
     // 读写状态查询 — 用于 Controller 的 ping 决策和 Channel 的状态聚合
     bool writable() { return _write_state == STATE_WRITABLE; }

@@ -42,7 +42,10 @@ private:
     void _add_connection(IceConnection* conn);
     void _sort_connections_and_update_state();
     void _maybe_start_pinging();
+    void _on_check_and_ping();                      // 定时器回调: 周期性连通性检查
 
+    // libev 定时器回调函数，声明为 friend 以访问私有成员 _on_check_and_ping
+    friend void ice_ping_cb(EventLoop* /*el*/, TimerWatcher* /*w*/, void* data);
 private:
     EventLoop* _el;
     std::string _transport_name;
@@ -54,6 +57,7 @@ private:
     std::vector<UDPPort*> _ports;
     std::unique_ptr<IceController> _ice_controller;  // 连接选择器: 决定 ping 谁、选谁
     bool _start_pinging = false;                     // 连通性检查是否已启动 (只启动一次)
+    TimerWatcher* _ping_watcher = nullptr;           // 周期性 ping 定时器 (libev repeating timer)
 };
 
 

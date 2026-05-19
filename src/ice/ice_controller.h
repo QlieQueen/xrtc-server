@@ -31,6 +31,7 @@ public:
     ~IceController() = default;
 
     void add_connection(IceConnection* conn);
+    const std::vector<IceConnection*> connections() { return _connections; }
     bool has_pingable_connection();
 
 private:

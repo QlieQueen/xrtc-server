@@ -7,6 +7,14 @@
 
 namespace xrtc {
 
+
+// 定时器回调: libev 在 WEAK_PING_INTERVAL 到期时调用，
+// 通过 data 指针找回 IceTransportChannel 实例，触发连通性检查
+void ice_ping_cb(EventLoop* /*el*/, TimerWatcher* /*w*/, void* data) {
+    IceTransportChannel* channel = (IceTransportChannel*)data;
+    channel->_on_check_and_ping();
+}
+
 IceTransportChannel::IceTransportChannel(EventLoop* el, PortAllocator* alloctor,
         const std::string& transport_name,
         IceCandidateComponent component) :
@@ -18,9 +26,17 @@ IceTransportChannel::IceTransportChannel(EventLoop* el, PortAllocator* alloctor,
 {
     RTC_LOG(LS_INFO) << "ice transport channel created, transport_name: " << _transport_name
         << ", component: " << component;
+    // 创建重复定时器: 用于周期性连通性检查 (ping)
+    _ping_watcher = _el->create_timer(ice_ping_cb, this, true);
 }
 
 IceTransportChannel::~IceTransportChannel() {
+
+    // 停止并销毁 ping 定时器
+    if (_ping_watcher) {
+        _el->delete_timer(_ping_watcher);
+        _ping_watcher = nullptr;
+    }
 
     for (auto port : _ports) {
         delete port;
@@ -46,6 +62,13 @@ void IceTransportChannel::set_remote_ice_params(const IceParameters& remote_ice_
         << ", ufrag: " << remote_ice_params.ice_ufrag
         << ", pwd: " << remote_ice_params.ice_pwd;
     _remote_ice_params = remote_ice_params;
+
+    // ANSWER 到达后，为已有连接补填对端密码 (之前只有 ufrag)
+    for (auto conn : _ice_controller->connections()) {
+        conn->maybe_set_remote_ice_params(remote_ice_params);
+    }
+    // 凭据补全后重新检查状态: 可能首次满足 ping 条件
+    _sort_connections_and_update_state();
 }
 
 void IceTransportChannel::gathering_candidate() {
@@ -186,8 +209,27 @@ void IceTransportChannel::_maybe_start_pinging() {
     if (_ice_controller->has_pingable_connection()) {
         RTC_LOG(LS_INFO) << to_string() << ": Have a pingable connection "
             << "for the first time, starting to ping";
-        // todo: 启动定时器 (后续 commit)
+        // 启动重复定时器，WEAK_PING_INTERVAL(48ms) * 1000 → 48000 usec
+        // channel weak → 加速探测，每 48ms 触发一次 _on_check_and_ping
+        _el->start_timer(_ping_watcher, WEAK_PING_INTERVAL * 1000);
+        _start_pinging = true;
     }
+}
+
+
+// ============================================================================
+// IceTransportChannel::_on_check_and_ping — 周期性连通性检查入口 (TODO 后续 commit)
+//
+// 由定时器 ice_ping_cb 回调触发，当前仅打印日志占位。
+// 后续 commit 将在此做:
+//   1. 从 controller 选择一个连接发送 STUN ping
+//   2. 检查连接超时
+//   3. 更新连接状态 (writable / receiving / timeout)
+//   4. 切换 selected connection
+//   5. 更新 channel 聚合状态
+// ============================================================================
+void IceTransportChannel::_on_check_and_ping() {
+    RTC_LOG(LS_WARNING) << "===================_on_check_and_ping";
 }
 
 std::string IceTransportChannel::to_string() {

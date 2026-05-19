@@ -91,6 +91,23 @@ void IceConnection::on_read_packet(const char* buf, size_t len, int64_t ts) {
     }
 }
 
+// ============================================================================
+// IceConnection::maybe_set_remote_ice_params — 补填远程 ICE 密码
+//
+// 场景: STUN binding request 到达时，从 USERNAME 提取了客户端的 ufrag，
+//       remote_candidate.username 已知，但 password 还是空的。
+//       ANSWER SDP 到达后，set_remote_ice_params 被调用，
+//       根据已匹配的 ufrag 把 password 补填进去。
+//       此后该连接满足"远程凭据完整"条件，可以被 ping。
+// ============================================================================
+void IceConnection::maybe_set_remote_ice_params(const IceParameters& ice_params) {
+    if (_remote_candidate.username == ice_params.ice_ufrag &&
+            _remote_candidate.password.empty())
+    {
+        _remote_candidate.password = ice_params.ice_pwd;
+    }
+}
+
 std::string IceConnection::to_string() {
     std::stringstream ss;
     ss << "Conn[" << this << ":" << _port->transport_name()
