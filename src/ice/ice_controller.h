@@ -1,6 +1,7 @@
 #ifndef __ICE_CONTROLLER_H_
 #define __ICE_CONTROLLER_H_
 
+#include <set>
 #include <vector>
 
 #include "ice/ice_connection.h"
@@ -53,12 +54,15 @@ private:
     const IceConnection* _find_next_pingable_connection(int64_t now);
     bool _is_connection_past_ping_interval(const IceConnection* conn, int64_t now);
     int _get_connection_ping_interval(const IceConnection* conn,   int64_t now);
+    bool _more_pingable(IceConnection* conn1, IceConnection* conn2);
 
 private:
     IceTransportChannel* _ice_channel;
     IceConnection* _selected_connection = nullptr;
     std::vector<IceConnection*> _connections;
     int64_t _last_ping_sent_ms = 0;                    // channel 全局速率门: 上次发出 ping 的时间
+    std::set<IceConnection*> _pinged_connections;
+    std::set<IceConnection*> _unpinged_connections;
 };
 
 } // namespace xrtc 

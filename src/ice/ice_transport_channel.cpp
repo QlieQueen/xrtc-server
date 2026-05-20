@@ -232,6 +232,9 @@ void IceTransportChannel::_maybe_start_pinging() {
 void IceTransportChannel::_on_check_and_ping() {
     auto result = _ice_controller->select_connection_to_ping(_last_ping_sent_ms);
 
+    RTC_LOG(LS_WARNING) << to_string() << ": ping result, conn: " << result.conn
+        << ", ping interval: " << result.ping_interval;
+
     // ping_interval 变化时重启定时器: 降级加速 / 升级减速
     if (_cur_ping_interval != result.ping_interval) {
         _cur_ping_interval = result.ping_interval;

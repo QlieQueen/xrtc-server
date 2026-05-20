@@ -25,10 +25,13 @@ bool IceController::has_pingable_connection() {
 // IceController::add_connection — 注册连接
 //
 // 由 IceTransportChannel::_add_connection 调用。
-// 新创建的 IceConnection 注册到 controller，后续参与 ping 决策和排序。
+// 新创建的 IceConnection 注册到 controller:
+//   1. 加入 _connections 列表 (总览)
+//   2. 加入 _unpinged_connections 集合 (待 ping 队列，参与 round-robin)
 // ============================================================================
 void IceController::add_connection(IceConnection* conn) {
     _connections.push_back(conn);
+    _unpinged_connections.insert(conn);
 }
 
 // ============================================================================
@@ -107,12 +110,17 @@ PingResult IceController::select_connection_to_ping(int64_t last_ping_sent_ms) {
 // ============================================================================
 // IceController::_find_next_pingable_connection — 找下一个可 ping 的连接
 //
-// 当前策略: selected connection 优先 (它用于发送数据，优先保持活跃)
-// 条件:
-//   1. selected connection 存在且双向通畅 (writable)
-//   2. 它已过自己的 connection 级 ping 间隔
+// 两级选择:
+//   1. selected connection 优先 (它用于发送数据，优先保持活跃)
+//      条件: 存在 && writable && 已过 connection 级 ping 间隔
+//   2. 如果 selected 不适合 → round-robin 公平选择 (unpinged / pinged 双集合)
+//      - _unpinged_connections: 本轮尚未 ping 的连接
+//      - _pinged_connections:   本轮已 ping 过的连接
+//      - 当 unpinged 中无可 ping 连接时 → pinged 全部倒回 unpinged，开始新一轮
+//      - 用 _more_pingable 选出最久未 ping 的连接 (最 overdue 优先)
 //
-// 后续 commit: 补充 round-robin 公平选择 (unpinged/pinged 集合)
+// 注意: 被选中的连接不会立即从 unpinged 移除，
+//       要等实际 ping 发出后才移到 pinged (后续 commit)。
 // ============================================================================
 const IceConnection* IceController::_find_next_pingable_connection(int64_t now) {
     if (_selected_connection && _selected_connection->writable() &&
@@ -121,7 +129,54 @@ const IceConnection* IceController::_find_next_pingable_connection(int64_t now) 
         return _selected_connection;
     }
 
-    return nullptr;
+    bool has_pingable = false;
+    for (auto conn : _unpinged_connections) {
+        if (_is_pingable(conn)) {
+            has_pingable = true;
+            break;
+        }
+    }
+
+    if (!has_pingable) {
+        _unpinged_connections.insert(_pinged_connections.begin(),
+            _pinged_connections.end());
+        _pinged_connections.clear();
+    }
+
+    IceConnection* find_conn = nullptr;
+    for (auto conn : _unpinged_connections) {
+        if (_more_pingable(conn, find_conn)) {
+            find_conn = conn;
+        }
+    }
+
+    return find_conn;
+}
+
+// ============================================================================
+// IceController::_more_pingable — 比较两个连接谁更应该被 ping
+//
+// 标准: last_ping_sent() 更小的优先 (等待时间更长 = 更 overdue)。
+// 保证 round-robin 公平: 每个连接都能轮到自己被 ping。
+// ============================================================================
+bool IceController::_more_pingable(IceConnection* conn1, IceConnection* conn2) {
+    if (!conn1) {
+        return false;
+    }
+
+    if (!conn2) {
+        return true;
+    }
+
+    if (conn1->last_ping_sent() < conn2->last_ping_sent()) {
+        return true;
+    }
+
+    if (conn1->last_ping_sent() > conn2->last_ping_sent()) {
+        return false;
+    }
+
+    return false;
 }
 
 // ============================================================================
