@@ -2,6 +2,7 @@
 
 #include <sstream>
 #include <rtc_base/logging.h>
+#include <rtc_base/time_utils.h>
 
 #include "ice/ice_connection.h"
 
@@ -224,10 +225,11 @@ void IceTransportChannel::_maybe_start_pinging() {
 //
 // 流程:
 //   1. controller 选择本周期要 ping 的连接 + 返回新的 ping_interval
-//   2. 如果 interval 变化 (480ms↔48ms): 重启定时器
+//   2. 如果选中了连接 → _ping_connection 发出 ping
+//   3. 如果 interval 变化 (480ms↔48ms): 重启定时器
 //      - 降级 (strong→weak): 480ms→48ms, 立即加速探测
 //      - 升级 (weak→strong): 48ms→480ms, 节省带宽
-//   3. 后续 commit: 实际发送 STUN ping、检查超时、更新状态、切换连接
+//   4. 后续 commit: 检查超时、更新状态、切换连接
 // ============================================================================
 void IceTransportChannel::_on_check_and_ping() {
     auto result = _ice_controller->select_connection_to_ping(_last_ping_sent_ms);
@@ -235,12 +237,27 @@ void IceTransportChannel::_on_check_and_ping() {
     RTC_LOG(LS_WARNING) << to_string() << ": ping result, conn: " << result.conn
         << ", ping interval: " << result.ping_interval;
 
+    if (result.conn) {
+        _ping_connection(const_cast<IceConnection*>(result.conn));
+    }
+
     // ping_interval 变化时重启定时器: 降级加速 / 升级减速
     if (_cur_ping_interval != result.ping_interval) {
         _cur_ping_interval = result.ping_interval;
         _el->stop_timer(_ping_watcher);
         _el->start_timer(_ping_watcher, _cur_ping_interval * 1000);
     }
+}
+
+// ============================================================================
+// IceTransportChannel::_ping_connection — 对指定连接发出 ping
+//
+// 更新 channel 全局 ping 时间，委托 IceConnection::ping() 创建并发送
+// STUN Binding Request。
+// ============================================================================
+void IceTransportChannel::_ping_connection(IceConnection* conn) {
+    _last_ping_sent_ms = rtc::TimeMillis();
+    conn->ping(_last_ping_sent_ms);
 }
 
 std::string IceTransportChannel::to_string() {

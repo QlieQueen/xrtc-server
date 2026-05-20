@@ -2,6 +2,8 @@
 
 #include <rtc_base/logging.h>
 
+#include "ice/stun_request.h"
+
 namespace xrtc {
 
 IceConnection::IceConnection(EventLoop* el, UDPPort* port, const Candidate& remote_candidate) :
@@ -111,6 +113,11 @@ void IceConnection::maybe_set_remote_ice_params(const IceParameters& ice_params)
 bool IceConnection::stable(int64_t now) const {
     // todo
     return false;
+}
+
+void IceConnection::ping(int64_t now) {
+    ConnectionRequest* request = new ConnectionRequest(this);    // 记得在收到对应的response的时候进行delete回收
+    _pings_since_last_responses.push_back(SentPing(request->id(), now));
 }
 
 std::string IceConnection::to_string() {

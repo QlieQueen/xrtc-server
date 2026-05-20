@@ -34,6 +34,15 @@ public:
         STATE_WRITE_TIMEOUT = 3,    // 大量 ping 无回复，连接已死
     };
 
+    // 记录一次发出的 ping: id 用于匹配响应，sent_time 用于 RTT 计算
+    struct SentPing {
+        SentPing(const std::string& id, int64_t ts) :
+            id(id), sent_time(ts) {}
+
+        std::string id;
+        int64_t sent_time;
+    };
+
     IceConnection(EventLoop* el, UDPPort* port, const Candidate& remote_candidate);
     ~IceConnection();
 
@@ -53,6 +62,7 @@ public:
     bool weak() { return !(writable() && receiving()); }   // 双向都通才不是 weak
     bool active() { return _write_state != STATE_WRITE_TIMEOUT; }  // 没超时就是活跃的
     bool stable(int64_t now) const;
+    void ping(int64_t now);
 
     int64_t last_ping_sent() const { return _last_ping_sent; }
     int num_pings_sent() const { return _num_pings_sent; }
@@ -68,7 +78,7 @@ private:
 
     int64_t _last_ping_sent = 0;
     int _num_pings_sent = 0;
-
+    std::vector<SentPing> _pings_since_last_responses;  // 已发但尚未收到响应的 ping 列表
 };
 
 } // namespace xrtc

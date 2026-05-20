@@ -1,0 +1,71 @@
+#ifndef __STUN_REQUEST_H_
+#define __STUN_REQUEST_H_
+
+#include "ice/stun.h"
+
+namespace xrtc {
+
+class StunRequest;
+
+// ============================================================================
+// StunRequestManager — STUN 请求发送管理器
+//
+// 统一的请求发送入口，后续 commit 会加入定时重传、响应匹配等逻辑。
+// ============================================================================
+class StunRequestManager {
+public:
+    StunRequestManager() = default;
+    ~StunRequestManager() = default;
+
+    void send(StunRequest* request);
+};
+
+class IceConnection;
+
+// ============================================================================
+// StunRequest — STUN 请求基类
+//
+// 持有一个 StunMessage，通过 construct() → prepare() 的模板方法模式，
+// 让子类只关注消息内容的填充。
+//
+// 生命周期:
+//   1. 子类构造函数中 new StunMessage() 传入基类
+//   2. 外部调用 construct() → prepare(msg) 填充字段
+//   3. 发送后等待响应，匹配成功时 delete
+// ============================================================================
+class StunRequest {
+public:
+    StunRequest(StunMessage* msg);
+    ~StunRequest();
+
+    std::string id() { return _msg->transaction_id(); }
+
+    void construct();
+
+protected:
+    virtual void prepare(StunMessage* msg) { }
+
+private:
+    StunMessage* _msg;
+};
+
+// ============================================================================
+// ConnectionRequest — ICE 连通性检查请求 (STUN Binding Request)
+//
+// 每个 ConnectionRequest 对应一次 STUN ping。
+// prepare() 负责填充 Binding Request 的各个属性 (后续 commit)。
+// ============================================================================
+class ConnectionRequest : public StunRequest {
+public:
+    ConnectionRequest(IceConnection* connection);
+    ~ConnectionRequest() = default;
+
+    void prepare(StunMessage* msg) override;
+
+private:
+    IceConnection* _connection;
+};
+
+} // namespace xrtc
+
+#endif // __STUN_REQUEST_H_
