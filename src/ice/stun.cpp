@@ -884,4 +884,40 @@ bool StunErrorCodeAttribute::write(rtc::ByteBufferWriter* buf) {
     return true;
 }
 
+// ============================================================================
+// is_stun_request_type — 检查消息类型是否为 STUN Request
+//
+// STUN 协议的 class bits 在 type 字段的 bit4 (C0) 和 bit8 (C1)。
+// Request 的 class = 0x000 (C1=0, C0=0)，即 class bits 全为 0。
+// k_stun_class_mask = 0x0110 隔离出 bit4 + bit8。
+// 例: 0x0001 (STUN_BINDING_REQUEST) & 0x0110 = 0x000 → true
+// ============================================================================
+static bool is_stun_request_type(uint16_t msg_type) {
+    return (msg_type & k_stun_class_mask) == STUN_CLASS_REQUEST;
+}
+
+// ============================================================================
+// get_stun_success_response / get_stun_error_response — 请求类型 → 响应类型
+//
+// 通过 class 位替换将请求类型转为对应的成功/错误响应类型:
+//   1. 先清除 class bits: req_type & ~k_stun_class_mask (bit4, bit8 清零)
+//   2. 再设置目标 class: | STUN_CLASS_SUCCESS_RESPONSE (0x100) / STUN_CLASS_ERROR_RESPONSE (0x110)
+//
+// 例: STUN_BINDING_REQUEST (0x0001) → STUN_BINDING_RESPONSE (0x0101)
+//     0x0001 & ~0x0110 | 0x100 = 0x0001 | 0x100 = 0x0101
+//
+// 如果 req_type 不是 Request 类型 (class bits 非全 0)，返回 -1。
+// ============================================================================
+int get_stun_success_response(int req_type) {
+    return is_stun_request_type(req_type) ?
+            ((req_type & ~k_stun_class_mask) | STUN_CLASS_SUCCESS_RESPONSE)
+            : -1;
+}
+
+int get_stun_error_response(int req_type) {
+    return is_stun_request_type(req_type) ?
+            ((req_type & ~k_stun_class_mask) | STUN_CLASS_ERROR_RESPONSE)
+            : -1;
+}
+
 } // namespace xrtc

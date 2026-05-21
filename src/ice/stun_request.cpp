@@ -2,6 +2,7 @@
 
 #include <rtc_base/helpers.h>
 #include <rtc_base/byte_buffer.h>
+#include <rtc_base/logging.h>
 
 #include "ice/ice_connection.h"
 
@@ -21,6 +22,44 @@ void StunRequestManager::send(StunRequest* request) {
     request->set_manager(this);
     _requests[request->id()] = request;
     request->send();
+}
+
+// ============================================================================
+// StunRequestManager::check_response — STUN 响应匹配与分发
+//
+// 流程:
+//   1. 用 msg 的 transaction_id 在 _requests map 中查找对应的 request
+//   2. 找到: 用 class 位掩码验证响应类型 (Success/Error) 与请求类型一致
+//   3. 类型匹配 → 调用虚函数 on_response/on_error_response 分发给子类
+//   4. 类型不匹配 → 仅打 warning 日志，不做分发
+//
+// 返回值: true=找到了对应的 request (无论类型是否匹配)
+//         false=没有找到 (调用方自行处理 orphan response)
+//
+// class 位运算原理:
+//   Request 的 class bits 全为 0 (STUN_CLASS_REQUEST = 0x000)
+//   成功响应 class = 0x100, 错误响应 class = 0x110
+//   get_stun_success_response: (req_type & ~0x0110) | 0x100  → 把 class 位替换为 Success
+//   get_stun_error_response:  (req_type & ~0x0110) | 0x110  → 把 class 位替换为 Error
+// ============================================================================
+bool StunRequestManager::check_response(StunMessage* msg) {
+    auto iter = _requests.find(msg->transaction_id());
+    if (iter == _requests.end()) {
+        return false;
+    }
+
+    StunRequest* request = iter->second;
+
+    if (msg->type() == get_stun_success_response(request->type())) {
+        request->on_response(msg);
+    } else if (msg->type() == get_stun_error_response(request->type())) {
+        request->on_error_response(msg);
+    } else {
+        RTC_LOG(LS_WARNING) << "Received Stun Binding response with wrong type="
+            << msg->type() << ", id=" << msg->transaction_id();
+    }
+
+    return true;
 }
 
 // ============================================================================
@@ -73,6 +112,20 @@ void ConnectionRequest::prepare(StunMessage* msg) {
     msg->add_message_integrity(_connection->remote_candidate().password);
     // 指纹: CRC32
     msg->add_fingerprint();
+}
+
+// ============================================================================
+// ConnectionRequest::on_response / on_error_response — 响应分发到 IceConnection
+//
+// StunRequestManager 匹配到响应后，通过虚函数回调此处。
+// 不做业务处理，直接委托给 IceConnection 的方法 (后续 commit 实现 RTT 计算等)。
+// ============================================================================
+void ConnectionRequest::on_response(StunMessage* msg) {
+    _connection->on_connection_response(this, msg);
+}
+
+void ConnectionRequest::on_error_response(StunMessage* msg) {
+    _connection->on_connection_error_response(this, msg);
 }
 
 // 构造函数: 为消息生成随机的 transaction_id (96-bit = 12 bytes)

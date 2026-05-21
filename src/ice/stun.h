@@ -58,6 +58,22 @@ const uint32_t k_stun_magic_cookie = 0x2112A442;   // Magic Cookie 固定值
 const size_t k_stun_magic_cookie_length = sizeof(k_stun_magic_cookie);
 const size_t k_stun_message_integrity_size = 20;   // mi属性的value的长度
 
+/*
+Class: 2 bits: 在type里的 bit 4 和 bit 8，共有2个组合
+    00 = Request (请求)
+    01 = Indication (指示)
+    10 = Success Response (成功回应)
+    11 = Error Response (失败回应)   
+*/
+const uint16_t STUN_CLASS_REQUEST = 0x000;
+const uint16_t STUN_CLASS_INDICATION = 0x010;
+const uint16_t STUN_CLASS_SUCCESS_RESPONSE = 0x100;
+const uint16_t STUN_CLASS_ERROR_RESPONSE = 0x110;
+
+constexpr uint16_t k_stun_class_mask = 0x0110;
+constexpr uint16_t k_stun_method_mask = 0x3EEF;
+
+
 // --- STUN 消息类型 (type 字段的解析值, 方法 + class) ---
 enum StunMessageType {
     STUN_BINDING_REQUEST  = 0x0001,  // Binding 请求: method=Binding(0x001) + class=Request(0x000)
@@ -111,6 +127,11 @@ enum StunAttributeValueType {
 
 std::string stun_method_to_string(int type);
 
+// STUN 响应类型计算: 用 class 位掩码将请求类型转为对应的响应类型
+// req_type & ~k_stun_class_mask 清除 class 位, | STUN_CLASS_*_RESPONSE 设置新 class
+int get_stun_success_response(int req_type);
+int get_stun_error_response(int req_type);
+
 // 前置声明
 class StunAttribute;
 class StunByteStringAttribute;
@@ -140,6 +161,10 @@ public:
 
     IntegrityStatus validate_message_integrity(const std::string& password);
     bool add_message_integrity(const std::string& password);
+
+    // MI 校验结果查询 — 调用方先 validate_message_integrity(), 再通过此 getter 判断是否合法
+    IntegrityStatus integrity() { return _integrity; }
+    bool integrity_ok() { return _integrity == IntegrityStatus::k_integrity_ok; }
 
     // --- 消息解析 ---
     // 从 ByteBufferReader 中读取并解析完整 STUN 消息 (头部 + 所有属性)

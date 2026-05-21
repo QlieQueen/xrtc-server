@@ -22,6 +22,10 @@ public:
 
     void send(StunRequest* request);
 
+    // STUN 响应匹配: 用 transaction_id 查找对应 request，验证响应类型后分发
+    // 返回 true = 找到了对应的 request (无论类型匹配与否)
+    bool check_response(StunMessage* msg);
+
 public:
     sigslot::signal3<StunRequest*, const char*, size_t>
             signal_send_packet;
@@ -50,6 +54,8 @@ public:
     ~StunRequest();
 
     std::string id() { return _msg->transaction_id(); }
+    // request type — 用于 check_response 中验证响应类型是否与请求匹配
+    uint16_t type() { return _msg->type(); }
 
     void construct();
 
@@ -60,6 +66,12 @@ public:
 protected:
     virtual void prepare(StunMessage* msg) { }
 
+    // 响应回调 — 由 StunRequestManager::check_response 根据响应类型分发
+    // 子类重写以处理业务逻辑 (如 ConnectionRequest 委托给 IceConnection)
+    virtual void on_response(StunMessage* msg) { }
+    virtual void on_error_response(StunMessage* msg) { }
+
+    friend class StunRequestManager;  // 允许 Manager 调用 set_manager()
 private:
     StunMessage* _msg;
     StunRequestManager* _manager = nullptr;
@@ -77,6 +89,8 @@ public:
     ~ConnectionRequest() = default;
 
     void prepare(StunMessage* msg) override;
+    void on_response(StunMessage* msg);
+    void on_error_response(StunMessage* msg);
 
 private:
     IceConnection* _connection;
