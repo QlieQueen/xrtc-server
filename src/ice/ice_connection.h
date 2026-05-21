@@ -6,6 +6,7 @@
 #include "ice/candidate.h"
 #include "ice/stun.h"
 #include "ice/ice_credentials.h"
+#include "ice/stun_request.h"
 
 namespace xrtc {
 
@@ -47,6 +48,9 @@ public:
     ~IceConnection();
 
     const Candidate& remote_candidate() const { return _remote_candidate; }
+    const Candidate& local_candidate() const;
+
+    UDPPort* port() { return _port; }
 
     void handle_stun_binding_request(StunMessage* stun_msg);
     void send_stun_binding_response(StunMessage* stun_msg);
@@ -79,6 +83,7 @@ private:
     int64_t _last_ping_sent = 0;
     int _num_pings_sent = 0;
     std::vector<SentPing> _pings_since_last_responses;  // 已发但尚未收到响应的 ping 列表
+    StunRequestManager _requests;                       // 管理 STUN 请求的发送与后续重传
 };
 
 } // namespace xrtc

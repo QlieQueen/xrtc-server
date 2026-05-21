@@ -752,6 +752,33 @@ bool StunUint32Attribute::write(rtc::ByteBufferWriter* buf) {
 }
 
 // ============================================================================
+// StunUint64Attribute — uint64 类型属性实现
+//
+// 用于 ICE-CONTROLLING (64位 tiebreaker)。
+// SIZE = 8 字节，read 时校验属性长度必须等于 8。
+// ============================================================================
+StunUint64Attribute::StunUint64Attribute(uint16_t type) :
+    StunAttribute(type, SIZE) {}
+
+StunUint64Attribute::StunUint64Attribute(uint16_t type, uint64_t value) :
+    StunAttribute(type, SIZE), _bits(value) {}
+
+StunUint64Attribute::~StunUint64Attribute() {}
+
+bool StunUint64Attribute::read(rtc::ByteBufferReader* buf) {
+    if (length() != SIZE || !buf->ReadUInt64(&_bits)) {
+        return false;
+    }
+    return true;
+}
+
+// 写入 8 字节无符号整数 (ICE-CONTROLLING tiebreaker)
+bool StunUint64Attribute::write(rtc::ByteBufferWriter* buf) {
+    buf->WriteUInt64(_bits);
+    return true;
+}
+
+// ============================================================================
 // StunByteStringAttribute — 字节串属性实现
 //
 // 用于 USERNAME (local_ufrag:remote_ufrag) 和 MESSAGE-INTEGRITY (HMAC-SHA1 值)

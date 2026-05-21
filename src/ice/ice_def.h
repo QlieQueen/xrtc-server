@@ -25,8 +25,13 @@ enum IceCandidateComponent {
     RTCP = 2
 };
 
+// ICE candidate 类型优先级 (RFC 5245 §4.1.2.1): 类型优先值占 priority 的高 8 位
+// 值越高优先级越高: host > prflx > srflx > relay
 enum IcePriorityValue {
-    ICE_TYPE_PREFERENCE_HOST = 126,
+    ICE_TYPE_PREFERENCE_RELAY_UDP = 2,
+    ICE_TYPE_PREFERENCE_SRFLX     = 100,
+    ICE_TYPE_PREFERENCE_PRFLX     = 110,
+    ICE_TYPE_PREFERENCE_HOST      = 126,
 };
 
 } // namespace xrtc

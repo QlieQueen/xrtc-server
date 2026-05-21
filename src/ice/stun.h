@@ -72,7 +72,9 @@ enum StunAttributeType {
     STUN_ATTR_ERROR_CODE         = 0x0009,
     STUN_ATTR_XOR_MAPPED_ADDRESS = 0x0020,
     STUN_ATTR_PRIORITY           = 0X0024,
+    STUN_ATTR_USE_CANDIDATE      = 0X0025,   // 提名标志: 携带此属性表示提名该 pair 用于媒体通信
     STUN_ATTR_FINGERPRINT        = 0x8028,   // 指纹: CRC32(message) ^ 0x5354554E
+    STUN_ATTR_ICE_CONTROLLING    = 0x802A,   // ICE 角色冲突解决: 64位 tiebreaker
 };
 
 // --- Stun 协议错误码  ---
@@ -293,6 +295,29 @@ public:
 
 private:
     uint32_t _bits;
+};
+
+// ============================================================================
+// StunUint64Attribute — uint64 类型属性 (ICE-CONTROLLING tiebreaker 等)
+//
+// 用于 8 字节整数字段。ICE-CONTROLLING 是一个 64 位随机数，
+// 用于解决 ICE 角色冲突: 两个 controlling 端比较 tiebreaker，大的胜出。
+// ============================================================================
+class StunUint64Attribute : public StunAttribute {
+public:
+    static const size_t SIZE = 8;
+    StunUint64Attribute(uint16_t type);
+    StunUint64Attribute(uint16_t type, uint64_t value);
+    ~StunUint64Attribute() override;
+
+    uint64_t value() const { return _bits; }
+    void set_value(uint64_t value) { _bits = value; }
+
+    bool read(rtc::ByteBufferReader* buf) override;
+    bool write(rtc::ByteBufferWriter* buf) override;
+
+private:
+    uint64_t _bits;
 };
 
 // ============================================================================

@@ -46,7 +46,8 @@ public:
     const std::string& transport_name() const { return _transport_name; }
     IceCandidateComponent component() const { return _component; }
     const rtc::SocketAddress& local_addr() const { return _local_addr; }
-    const std::vector<Candidate>& condidates() const { return _candidates; }
+    const std::vector<Candidate>& candidates() const { return _candidates; }
+
     std::string to_string();
     void send_binding_error_response(StunMessage* stun_msg,
             const rtc::SocketAddress& addr,
@@ -54,6 +55,8 @@ public:
             const std::string& reason);
     IceConnection* create_connection(const Candidate& remote_candidate);
     IceConnection* get_connection(const rtc::SocketAddress& addr);
+    void create_stun_username(const std::string& remote_username,
+            std::string* stun_attr_username);
 
     // STUN binding request 收到且校验通过后，发射此信号通知上层 (IceTransportChannel)
     // 参数: UDPPort自己, 对端地址, 解析好的stun_msg, 对端的remote_ufrag

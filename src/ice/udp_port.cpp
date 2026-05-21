@@ -339,4 +339,21 @@ IceConnection* UDPPort::create_connection(const Candidate& remote_candidate) {
     return conn;
 }
 
+
+// ============================================================================
+// UDPPort::create_stun_username — 构造 STUN USERNAME 属性值
+//
+// 格式: remote_ufrag:local_ufrag
+// 对端 ufrag 在前，自己的在后 (RFC 5245 §7.1.2.3)。
+// 用于 Binding Request 的 USERNAME 属性，帮助对端识别这是哪个 ICE session。
+// ============================================================================
+void UDPPort::create_stun_username(const std::string& remote_username,
+        std::string* stun_attr_username)
+{
+    stun_attr_username->clear();
+    *stun_attr_username = remote_username;
+    stun_attr_username->append(":");
+    stun_attr_username->append(_ice_params.ice_ufrag);
+}
+
 } // namespace xrtc

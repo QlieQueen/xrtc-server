@@ -11,6 +11,17 @@ IceConnection::IceConnection(EventLoop* el, UDPPort* port, const Candidate& remo
 
 IceConnection::~IceConnection() { }
 
+
+// ============================================================================
+// IceConnection::local_candidate — 获取本地 candidate
+//
+// UDPPort 可能持有多个 local candidates (当前 host candidate)。
+// 取第一个即可用于计算 prflx priority。
+// ============================================================================
+const Candidate& IceConnection::local_candidate() const {
+    return _port->candidates()[0];
+}
+
 void IceConnection::handle_stun_binding_request(StunMessage* stun_msg) {
     // role的冲突问题，ice角色： controlling control（为什么xrtc-server不存在角色冲突问题）
 
@@ -115,9 +126,21 @@ bool IceConnection::stable(int64_t now) const {
     return false;
 }
 
+// ============================================================================
+// IceConnection::ping — 发送 STUN Binding Request (连通性检查)
+//
+// 1. 创建 ConnectionRequest (构造 StunMessage 并生成随机 transaction_id)
+// 2. 记录 SentPing (id + 时间)，用于后续响应匹配和 RTT 计算
+// 3. 通过 StunRequestManager::send() → construct() → prepare() 填充属性并发送
+// 4. _num_pings_sent++ 影响 ping 间隔计算 (前3次 WEAK 48ms)
+//
+// 内存管理: request 在收到对应 response 时 delete (后续 commit)
+// ============================================================================
 void IceConnection::ping(int64_t now) {
-    ConnectionRequest* request = new ConnectionRequest(this);    // 记得在收到对应的response的时候进行delete回收
+    ConnectionRequest* request = new ConnectionRequest(this);
     _pings_since_last_responses.push_back(SentPing(request->id(), now));
+    _requests.send(request);
+    _num_pings_sent++;
 }
 
 std::string IceConnection::to_string() {
