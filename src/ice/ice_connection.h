@@ -8,6 +8,8 @@
 #include "ice/ice_credentials.h"
 #include "ice/stun_request.h"
 
+#include <rtc_base/third_party/sigslot/sigslot.h>
+
 namespace xrtc {
 
 // ============================================================================
@@ -25,7 +27,7 @@ namespace xrtc {
 //   _port: 归属的 UDPPort (本地端口)
 //   _remote_candidate: 对端的候选地址 (prflx candidate)
 // ============================================================================
-class IceConnection {
+class IceConnection : public sigslot::has_slots<> {
 public:
     // 写状态 — 衡量"我们→对端是否畅通"（ping 回复率）
     enum WriteState {
@@ -72,6 +74,10 @@ public:
     int num_pings_sent() const { return _num_pings_sent; }
 
     std::string to_string();
+
+private:
+    void _on_stun_send_packet(StunRequest* request, const char* buf, size_t size);
+
 private:
     EventLoop* _el;
     UDPPort* _port;
@@ -83,7 +89,7 @@ private:
     int64_t _last_ping_sent = 0;
     int _num_pings_sent = 0;
     std::vector<SentPing> _pings_since_last_responses;  // 已发但尚未收到响应的 ping 列表
-    StunRequestManager _requests;                       // 管理 STUN 请求的发送与后续重传
+    StunRequestManager _request_manager;                       // 管理 STUN 请求的发送与后续重传
 };
 
 } // namespace xrtc

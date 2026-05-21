@@ -1,6 +1,9 @@
 #ifndef __STUN_REQUEST_H_
 #define __STUN_REQUEST_H_
 
+#include <map>
+#include <rtc_base/third_party/sigslot/sigslot.h> 
+
 #include "ice/stun.h"
 
 namespace xrtc {
@@ -18,6 +21,14 @@ public:
     ~StunRequestManager() = default;
 
     void send(StunRequest* request);
+
+public:
+    sigslot::signal3<StunRequest*, const char*, size_t>
+            signal_send_packet;
+
+private:
+    typedef std::map<std::string, StunRequest*> requestMap;
+    requestMap _requests;
 };
 
 class IceConnection;
@@ -42,11 +53,16 @@ public:
 
     void construct();
 
+    void send();
+
+    void set_manager(StunRequestManager* manager);
+
 protected:
     virtual void prepare(StunMessage* msg) { }
 
 private:
     StunMessage* _msg;
+    StunRequestManager* _manager = nullptr;
 };
 
 // ============================================================================

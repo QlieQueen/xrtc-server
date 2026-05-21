@@ -1,6 +1,7 @@
 #include "ice/stun_request.h"
 
 #include <rtc_base/helpers.h>
+#include <rtc_base/byte_buffer.h>
 
 #include "ice/ice_connection.h"
 
@@ -9,10 +10,17 @@ namespace xrtc {
 // ============================================================================
 // StunRequestManager::send — 发送 STUN 请求
 //
-// 当前直接调用 construct()，后续 commit 加入定时重传和响应匹配。
+// 流程:
+//   1. construct() → prepare()  填充消息字段
+//   2. set_manager()             记录管理器指针 (请求通过它发射信号)
+//   3. _requests[id] = request   存入 map，后续响应匹配用
+//   4. request->send()           序列化消息 → 发射 signal_send_packet
 // ============================================================================
 void StunRequestManager::send(StunRequest* request) {
     request->construct();
+    request->set_manager(this);
+    _requests[request->id()] = request;
+    request->send();
 }
 
 // ============================================================================
@@ -87,5 +95,22 @@ void StunRequest::construct() {
     prepare(_msg);
 }
 
+// ============================================================================
+// StunRequest::send — 序列化消息并发射信号
+//
+// write() 将 StunMessage 转为网络字节序 → 通过 _manager 的 signal_send_packet
+// 发射到上层 (IceConnection)，由 IceConnection 通过 UDPPort 发出。
+// ============================================================================
+void StunRequest::send() {
+    rtc::ByteBufferWriter buf;
+    if (!_msg->write(&buf)) {
+        return;
+    }
+    _manager->signal_send_packet(this, buf.Data(), buf.Length());
+}
+
+void StunRequest::set_manager(StunRequestManager* manager) {
+    _manager = manager;
+}
 
 } // namespace xrtc

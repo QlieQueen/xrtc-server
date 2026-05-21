@@ -7,7 +7,10 @@
 namespace xrtc {
 
 IceConnection::IceConnection(EventLoop* el, UDPPort* port, const Candidate& remote_candidate) :
-    _el(el), _port(port), _remote_candidate(remote_candidate) { }
+    _el(el), _port(port), _remote_candidate(remote_candidate)
+{
+    _request_manager.signal_send_packet.connect(this, &IceConnection::_on_stun_send_packet);
+}
 
 IceConnection::~IceConnection() { }
 
@@ -139,7 +142,7 @@ bool IceConnection::stable(int64_t now) const {
 void IceConnection::ping(int64_t now) {
     ConnectionRequest* request = new ConnectionRequest(this);
     _pings_since_last_responses.push_back(SentPing(request->id(), now));
-    _requests.send(request);
+    _request_manager.send(request);
     _num_pings_sent++;
 }
 
@@ -150,6 +153,20 @@ std::string IceConnection::to_string() {
         << ":" << _port->local_addr().ToString()
         << ":" << _remote_candidate.address.ToString();
     return ss.str();
+}
+
+// ============================================================================
+// IceConnection::_on_stun_send_packet — 响应 StunRequestManager 的信号
+//
+// StunRequest 序列化完成 → 通过 signal_send_packet 发射到此处 → UDP socket 发送。
+// 信号/槽设计: StunRequest 不直接依赖 UDPPort，由 IceConnection 做中介。
+// ============================================================================
+void IceConnection::_on_stun_send_packet(StunRequest* request, const char* buf, size_t size) {
+    int ret = _port->send_to(buf, size, _remote_candidate.address);
+    if (ret < 0) {
+        RTC_LOG(LS_WARNING) << to_string() << ": Failed to send STUN binding request, ret="
+            << ret << ", id=" << rtc::hex_encode(request->id());
+    }
 }
 
 

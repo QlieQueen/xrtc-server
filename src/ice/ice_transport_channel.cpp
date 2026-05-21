@@ -8,6 +8,9 @@
 
 namespace xrtc {
 
+// 时钟容差: 从 last_ping_sent_ms 减去 5ms，避免因系统时钟粒度
+// 导致错过 ping 周期 (比如定时器在 479ms 触发，本应 480ms 发 ping)
+const int PING_INTERVAL_DIFF = 5;
 
 // 定时器回调: libev 在 WEAK_PING_INTERVAL 到期时调用，
 // 通过 data 指针找回 IceTransportChannel 实例，触发连通性检查
@@ -232,7 +235,8 @@ void IceTransportChannel::_maybe_start_pinging() {
 //   4. 后续 commit: 检查超时、更新状态、切换连接
 // ============================================================================
 void IceTransportChannel::_on_check_and_ping() {
-    auto result = _ice_controller->select_connection_to_ping(_last_ping_sent_ms);
+    auto result = _ice_controller->select_connection_to_ping(
+        _last_ping_sent_ms - PING_INTERVAL_DIFF);
 
     RTC_LOG(LS_WARNING) << to_string() << ": ping result, conn: " << result.conn
         << ", ping interval: " << result.ping_interval;
