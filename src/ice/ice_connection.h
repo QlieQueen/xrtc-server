@@ -59,10 +59,11 @@ public:
     void send_response_message(const StunMessage& response);
 
     void on_read_packet(const char* buf, size_t len, int64_t ts);
+    void print_pings_since_last_response(std::string& pings, size_t max);
     // STUN 响应回调 — 由 ConnectionRequest 委托
     // 调用链: on_read_packet → MI 校验 → check_response → ConnectionRequest → 此处
-    void on_connection_response(ConnectionRequest* request, StunMessage* msg);
-    void on_connection_error_response(ConnectionRequest* request, StunMessage* msg);
+    void on_connection_request_response(ConnectionRequest* request, StunMessage* msg);
+    void on_connection_request_error_response(ConnectionRequest* request, StunMessage* msg);
     // ANSWER 到达后，补填已有连接的对端密码 (ufrag 匹配则填入 pwd)
     void maybe_set_remote_ice_params(const IceParameters& ice_params);
 

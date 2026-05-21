@@ -61,6 +61,8 @@ public:
 
     void send();
 
+    int elapsed();
+
     void set_manager(StunRequestManager* manager);
 
 protected:
@@ -68,13 +70,14 @@ protected:
 
     // 响应回调 — 由 StunRequestManager::check_response 根据响应类型分发
     // 子类重写以处理业务逻辑 (如 ConnectionRequest 委托给 IceConnection)
-    virtual void on_response(StunMessage* msg) { }
-    virtual void on_error_response(StunMessage* msg) { }
+    virtual void on_request_response(StunMessage* msg) { }
+    virtual void on_request_error_response(StunMessage* msg) { }
 
     friend class StunRequestManager;  // 允许 Manager 调用 set_manager()
 private:
     StunMessage* _msg;
     StunRequestManager* _manager = nullptr;
+    int64_t _ts = 0;
 };
 
 // ============================================================================
@@ -89,8 +92,8 @@ public:
     ~ConnectionRequest() = default;
 
     void prepare(StunMessage* msg) override;
-    void on_response(StunMessage* msg);
-    void on_error_response(StunMessage* msg);
+    void on_request_response(StunMessage* msg);
+    void on_request_error_response(StunMessage* msg);
 
 private:
     IceConnection* _connection;

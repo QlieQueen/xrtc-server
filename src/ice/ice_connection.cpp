@@ -1,5 +1,6 @@
 #include "ice/ice_connection.h"
 
+#include <sstream>
 #include <rtc_base/logging.h>
 
 #include "ice/stun_request.h"
@@ -117,24 +118,46 @@ void IceConnection::on_read_packet(const char* buf, size_t len, int64_t ts) {
     }
 }
 
-// ============================================================================
-// IceConnection::on_connection_response — 处理成功 STUN 响应
-//
-// 调用链: on_read_packet → MI 校验 → check_response → ConnectionRequest::on_response
-//         → 此处。后续 commit 将实现 RTT 计算及写状态更新。
-// ============================================================================
-void IceConnection::on_connection_response(ConnectionRequest* request, StunMessage* msg) {
-    // TODO: RTT 计算 (后续 commit)
-    RTC_LOG(LS_WARNING) << "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~";
+void IceConnection::print_pings_since_last_response(std::string& pings, size_t max) {
+    std::stringstream ss;
+    if (_pings_since_last_responses.size() > max) {
+        for (int i = 0; i < max; i++) {
+            ss << rtc::hex_encode(_pings_since_last_responses[i].id) << " ";
+        }
+        ss << "... " << (_pings_since_last_responses.size() - max) << " more";
+    } else {
+        for (auto ping : _pings_since_last_responses) {
+            ss << rtc::hex_encode(ping.id) << " ";
+        }
+    }
+
+    pings = ss.str();
 }
 
 // ============================================================================
-// IceConnection::on_connection_error_response — 处理 STUN 错误响应
+// IceConnection::on_connection_request_response — 处理成功 STUN 响应
+//
+// 调用链: on_read_packet → MI 校验 → check_response → ConnectionRequest::on_request_response
+//         → 此处。计算 RTT、打印 ping 列表 (后续 commit 会更新写状态)。
+// ============================================================================
+void IceConnection::on_connection_request_response(ConnectionRequest* request, StunMessage* msg) {
+    int rtt = request->elapsed();
+    std::string pings;
+    print_pings_since_last_response(pings, 5);
+    RTC_LOG(LS_INFO) << to_string() << ": Received "
+        << stun_method_to_string(msg->type())
+        << ", id=" << rtc::hex_encode(msg->transaction_id())
+        << ", rtt=" << rtt
+        << ", pings=" << pings;
+}
+
+// ============================================================================
+// IceConnection::on_connection_request_error_response — 处理 STUN 错误响应
 //
 // 对端返回错误 (如 401 Unauthorized，500 Server Error 等)。
 // 后续 commit 实现错误处理策略 (标记连接失败、重试等)。
 // ============================================================================
-void IceConnection::on_connection_error_response(ConnectionRequest* request, StunMessage* msg) {
+void IceConnection::on_connection_request_error_response(ConnectionRequest* request, StunMessage* msg) {
     // TODO: 错误响应处理 (后续 commit)
     RTC_LOG(LS_WARNING) << "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~";
 }
@@ -174,6 +197,8 @@ bool IceConnection::stable(int64_t now) const {
 void IceConnection::ping(int64_t now) {
     ConnectionRequest* request = new ConnectionRequest(this);
     _pings_since_last_responses.push_back(SentPing(request->id(), now));
+    RTC_LOG(LS_INFO) << to_string() << ": Sending STUN ping, id="
+        << rtc::hex_encode(request->id());
     _request_manager.send(request);
     _num_pings_sent++;
 }

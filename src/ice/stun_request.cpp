@@ -3,6 +3,7 @@
 #include <rtc_base/helpers.h>
 #include <rtc_base/byte_buffer.h>
 #include <rtc_base/logging.h>
+#include <rtc_base/time_utils.h>
 
 #include "ice/ice_connection.h"
 
@@ -51,9 +52,9 @@ bool StunRequestManager::check_response(StunMessage* msg) {
     StunRequest* request = iter->second;
 
     if (msg->type() == get_stun_success_response(request->type())) {
-        request->on_response(msg);
+        request->on_request_response(msg);
     } else if (msg->type() == get_stun_error_response(request->type())) {
-        request->on_error_response(msg);
+        request->on_request_error_response(msg);
     } else {
         RTC_LOG(LS_WARNING) << "Received Stun Binding response with wrong type="
             << msg->type() << ", id=" << msg->transaction_id();
@@ -120,12 +121,12 @@ void ConnectionRequest::prepare(StunMessage* msg) {
 // StunRequestManager 匹配到响应后，通过虚函数回调此处。
 // 不做业务处理，直接委托给 IceConnection 的方法 (后续 commit 实现 RTT 计算等)。
 // ============================================================================
-void ConnectionRequest::on_response(StunMessage* msg) {
-    _connection->on_connection_response(this, msg);
+void ConnectionRequest::on_request_response(StunMessage* msg) {
+    _connection->on_connection_request_response(this, msg);
 }
 
-void ConnectionRequest::on_error_response(StunMessage* msg) {
-    _connection->on_connection_error_response(this, msg);
+void ConnectionRequest::on_request_error_response(StunMessage* msg) {
+    _connection->on_connection_request_error_response(this, msg);
 }
 
 // 构造函数: 为消息生成随机的 transaction_id (96-bit = 12 bytes)
@@ -155,11 +156,17 @@ void StunRequest::construct() {
 // 发射到上层 (IceConnection)，由 IceConnection 通过 UDPPort 发出。
 // ============================================================================
 void StunRequest::send() {
+    _ts = rtc::TimeMillis();
     rtc::ByteBufferWriter buf;
     if (!_msg->write(&buf)) {
         return;
     }
     _manager->signal_send_packet(this, buf.Data(), buf.Length());
+}
+
+
+int StunRequest::elapsed() {
+    return rtc::TimeMillis() - _ts;
 }
 
 void StunRequest::set_manager(StunRequestManager* manager) {
