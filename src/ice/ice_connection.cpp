@@ -2,6 +2,7 @@
 
 #include <sstream>
 #include <rtc_base/logging.h>
+#include <rtc_base/time_utils.h>
 
 #include "ice/stun_request.h"
 
@@ -138,7 +139,7 @@ void IceConnection::print_pings_since_last_response(std::string& pings, size_t m
 // IceConnection::on_connection_request_response — 处理成功 STUN 响应
 //
 // 调用链: on_read_packet → MI 校验 → check_response → ConnectionRequest::on_request_response
-//         → 此处。计算 RTT、打印 ping 列表 (后续 commit 会更新写状态)。
+//         → 此处。计算 RTT、打印 ping 列表、更新读写状态。
 // ============================================================================
 void IceConnection::on_connection_request_response(ConnectionRequest* request, StunMessage* msg) {
     int rtt = request->elapsed();
@@ -149,6 +150,7 @@ void IceConnection::on_connection_request_response(ConnectionRequest* request, S
         << ", id=" << rtc::hex_encode(msg->transaction_id())
         << ", rtt=" << rtt
         << ", pings=" << pings;
+    received_ping_response(rtt);
 }
 
 // ============================================================================
@@ -195,12 +197,99 @@ bool IceConnection::stable(int64_t now) const {
 // 内存管理: request 在收到对应 response 时 delete (后续 commit)
 // ============================================================================
 void IceConnection::ping(int64_t now) {
+    _last_ping_sent = now;
     ConnectionRequest* request = new ConnectionRequest(this);
     _pings_since_last_responses.push_back(SentPing(request->id(), now));
     RTC_LOG(LS_INFO) << to_string() << ": Sending STUN ping, id="
         << rtc::hex_encode(request->id());
     _request_manager.send(request);
     _num_pings_sent++;
+}
+
+// ============================================================================
+// IceConnection::last_received — 最近一次收到任何数据的时间
+//
+// 取三类时间戳的最大值: ping request、ping response、数据包 (DTLS/RTP)
+// ============================================================================
+int64_t IceConnection::last_received() {
+    return std::max(std::max(_last_ping_received, _last_ping_response_received),
+        _last_data_received);
+}
+
+// ============================================================================
+// IceConnection::receiving_timeout — 接收超时阈值
+//
+// 超过 2500ms 没收到任何数据 → receiving = false (对端方向失活)
+// ============================================================================
+int IceConnection::receiving_timeout() {
+    return WEAK_CONNECTION_RECEIVE_TIMEOUT;
+}
+
+// ============================================================================
+// IceConnection::update_receiving — 更新"对端→我"方向是否存活
+//
+// 两条判断路径:
+//   Case 1: _last_ping_sent < _last_ping_response_received
+//     → 我发了 ping，之后收到了对方的 ping response → 对端肯定活着
+//   Case 2: 没收到 ping response
+//     → 检查是否在 receiving_timeout() 窗口内收到过任何数据
+//     → last_received() 取 _last_ping_received / _last_ping_response_received /
+//       _last_data_received 三者的最大值
+//
+// 状态变化时发射 signal_state_change，触发 Channel 重新排序连接。
+// ============================================================================
+void IceConnection::update_receiving(int64_t now) {
+    bool receiving = false;
+    if (_last_ping_sent < _last_ping_response_received) {
+        receiving = true;
+    } else {
+        receiving = last_received() > 0 &&
+            (now < last_received() + receiving_timeout());
+    }
+
+    if (_receiving == receiving) {
+        return;
+    }
+
+    RTC_LOG(LS_INFO) << to_string() << ": set receiving to " << receiving;
+    _receiving = receiving;
+    signal_state_change(this);
+}
+
+// ============================================================================
+// IceConnection::set_write_state — 更新写状态
+//
+// "我们→对端"方向 (ping 回复率):
+//   STATE_WRITABLE(0)     → ping 得到回复
+//   STATE_WRITE_UNRELIABLE(1) → 少量失败
+//   STATE_WRITE_INIT(2)   → 初始
+//   STATE_WRITE_TIMEOUT(3)→ 超时
+//
+// 状态变化时发射 signal_state_change，触发 Channel 重新排序连接。
+// ============================================================================
+void IceConnection::set_write_state(WriteState state) {
+    WriteState old_state = _write_state;
+    _write_state = state;
+    if (old_state != state) {
+        RTC_LOG(LS_INFO) << to_string() << ": set write state from " << old_state
+            << " to " << state;
+        signal_state_change(this);
+    }
+}
+
+// ============================================================================
+// IceConnection::received_ping_response — 收到 ping 响应后的状态更新
+//
+// 1. 记录 _last_ping_response_received 时间戳 (用于 RTT 和 receiving 判断)
+// 2. 清空 _pings_since_last_responses (这些 ping 已收到回复)
+// 3. update_receiving → 对端方向活着
+// 4. set_write_state → 我们→对端方向设为 WRITABLE
+// ============================================================================
+void IceConnection::received_ping_response(int rtt) {
+    _last_ping_response_received = rtc::TimeMillis();
+    _pings_since_last_responses.clear();
+    update_receiving(_last_ping_response_received);
+    set_write_state(STATE_WRITABLE);
 }
 
 std::string IceConnection::to_string() {

@@ -67,18 +67,26 @@ public:
     // ANSWER 到达后，补填已有连接的对端密码 (ufrag 匹配则填入 pwd)
     void maybe_set_remote_ice_params(const IceParameters& ice_params);
 
+    void set_write_state(WriteState state); 
     // 读写状态查询 — 用于 Controller 的 ping 决策和 Channel 的状态聚合
     bool writable() { return _write_state == STATE_WRITABLE; }
     bool receiving() { return _receiving; }
+    int64_t last_received();
+    int receiving_timeout();
+    void update_receiving(int64_t now);
     bool weak() { return !(writable() && receiving()); }   // 双向都通才不是 weak
     bool active() { return _write_state != STATE_WRITE_TIMEOUT; }  // 没超时就是活跃的
     bool stable(int64_t now) const;
     void ping(int64_t now);
+    void received_ping_response(int rtt);
 
     int64_t last_ping_sent() const { return _last_ping_sent; }
     int num_pings_sent() const { return _num_pings_sent; }
 
     std::string to_string();
+
+public:
+    sigslot::signal1<IceConnection*> signal_state_change;
 
 private:
     void _on_stun_send_packet(StunRequest* request, const char* buf, size_t size);
@@ -92,6 +100,9 @@ private:
     bool _receiving = false;
 
     int64_t _last_ping_sent = 0;
+    int64_t _last_ping_response_received = 0;
+    int64_t _last_ping_received = 0;
+    int64_t _last_data_received = 0;
     int _num_pings_sent = 0;
     std::vector<SentPing> _pings_since_last_responses;  // 已发但尚未收到响应的 ping 列表
     StunRequestManager _request_manager;                       // 管理 STUN 请求的发送与后续重传

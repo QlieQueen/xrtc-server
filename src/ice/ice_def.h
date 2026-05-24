@@ -16,9 +16,8 @@ extern const int WEAK_PING_INTERVAL;
 extern const int STRONG_PING_INTERVAL;
 extern const int STABLING_CONNECTION_PING_INTERVAL; // 900ms
 extern const int STABLE_CONNECTION_PING_INTERVAL; // 2500m
-
-
 extern const int MIN_PINGS_AT_WEAK_PING_INTERVAL;
+extern const int WEAK_CONNECTION_RECEIVE_TIMEOUT;
 
 enum IceCandidateComponent {
     RTP = 1,
