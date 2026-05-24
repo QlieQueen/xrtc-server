@@ -17,7 +17,8 @@ const int b_is_better = -1;
 //   1. writable  > 非 writable     (能发数据是首要条件)
 //   2. write_state 值小的 > 值大的  (WRITABLE=0 最好, WRITE_TIMEOUT=3 最差)
 //   3. receiving > 非 receiving    (对端方向还活着)
-//   4. 以上都相等 → 返回 0 (stable_sort 保持原序)
+//   4. priority 大的 > 小的         (RFC 5245 连接优先级)
+//   5. 以上都相等 → 返回 0, 由 stable_sort lambda 用 RTT 做最终 fallback
 //
 // 返回值: a_is_better(1) / b_is_better(-1) / 0(相等)
 // ============================================================================
@@ -46,6 +47,14 @@ int IceController::_compare_connections(IceConnection* a, IceConnection* b) {
         return b_is_better;
     }
 
+    if (a->priority() > b->priority()) {
+        return a_is_better;
+    }
+
+    if (a->priority() < b->priority()) {
+        return b_is_better;
+    }
+
     return 0;
 }
 
@@ -54,12 +63,17 @@ int IceController::_compare_connections(IceConnection* a, IceConnection* b) {
 //
 // 用 _compare_connections 对 _connections 做 stable_sort,
 // 排序后最优连接排到 _connections[0]。
+// 当 _compare_connections 返回 0 (所有条件相等) 时, 取 RTT 更小的连接。
 // "switch" 部分由调用方 _maybe_switch_selected_connection 负责 (本 commit 占位)。
 // ============================================================================
 IceConnection* IceController::sort_and_switch_connection() {
     absl::c_stable_sort(_connections, [this](IceConnection* conn1, IceConnection* conn2) {
-        // 大于0，则conn1质量好; 否则, conn2质量好
-        return _compare_connections(conn1, conn2) > 0;
+        int cmp = _compare_connections(conn1, conn2);
+        if (cmp != 0) {
+            // 大于0，则conn1质量好; 否则, conn2质量好
+            return cmp > 0;
+        }
+        return conn1->rtt() < conn2->rtt();
     });
 
     return nullptr;

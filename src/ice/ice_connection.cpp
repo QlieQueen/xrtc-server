@@ -3,10 +3,19 @@
 #include <sstream>
 #include <rtc_base/logging.h>
 #include <rtc_base/time_utils.h>
+#include <rtc_base/helpers.h>
 
 #include "ice/stun_request.h"
 
 namespace xrtc {
+
+// ============================================================================
+// RTT_RATIO — 指数平滑权重: old_rtt : new_rtt = 3 : 1
+//
+// rtt_new = rtt_old * 0.75 + rtt_measured * 0.25
+// 避免单次测量波动导致 RTT 抖动过大。
+// ============================================================================
+const int RTT_RATIO = 3;
 
 IceConnection::IceConnection(EventLoop* el, UDPPort* port, const Candidate& remote_candidate) :
     _el(el), _port(port), _remote_candidate(remote_candidate)
@@ -226,6 +235,23 @@ int IceConnection::receiving_timeout() {
 }
 
 // ============================================================================
+// IceConnection::priority — RFC 5245 candidate pair 优先级
+//
+// g = local candidate priority (controlling)
+// d = remote candidate priority (controlled)
+// priority = 2^32 * min(G, D) + 2 * max(G, D) + (G > D ? 1 : 0)
+//
+// 值越大连接越优, 在 _compare_connections 中作为第5级比较标准。
+// ============================================================================
+uint64_t IceConnection::priority() {
+    uint32_t g = local_candidate().priority;
+    uint32_t d = remote_candidate().priority;
+    uint64_t priority = std::min(g, d);
+    priority = priority << 32;
+    return priority + 2 * std::max(g, d) + (g > d ? 1 : 0);
+}
+
+// ============================================================================
 // IceConnection::update_receiving — 更新"对端→我"方向是否存活
 //
 // 两条判断路径:
@@ -280,12 +306,23 @@ void IceConnection::set_write_state(WriteState state) {
 // ============================================================================
 // IceConnection::received_ping_response — 收到 ping 响应后的状态更新
 //
-// 1. 记录 _last_ping_response_received 时间戳 (用于 RTT 和 receiving 判断)
-// 2. 清空 _pings_since_last_responses (这些 ping 已收到回复)
-// 3. update_receiving → 对端方向活着
-// 4. set_write_state → 我们→对端方向设为 WRITABLE
+// 1. 指数平滑更新 RTT (首次=测量值, 后续=old*0.75+new*0.25)
+// 2. 记录 _last_ping_response_received 时间戳 (用于 RTT 和 receiving 判断)
+// 3. 清空 _pings_since_last_responses (这些 ping 已收到回复)
+// 4. update_receiving → 对端方向活着
+// 5. set_write_state → 我们→对端方向设为 WRITABLE
 // ============================================================================
 void IceConnection::received_ping_response(int rtt) {
+    // old_rtt : new_rtt = 3 : 1
+    // 5 10 20 
+    // rtt1 = 5
+    // rtt2 = 5 * 0.75 + 10 * 0.25 = 3.75 + 2.5 = 6.25
+    if (_rtt_samples > 0) {
+        _rtt = rtc::GetNextMovingAverage(_rtt, rtt, RTT_RATIO);
+    } else {
+        _rtt = rtt;
+    }
+
     _last_ping_response_received = rtc::TimeMillis();
     _pings_since_last_responses.clear();
     update_receiving(_last_ping_response_received);
