@@ -43,7 +43,9 @@ private:
     void _sort_connections_and_update_state();
     void _maybe_start_pinging();
     void _on_check_and_ping();                      // 定时器回调: 周期性连通性检查
+    void _on_connection_state_change(IceConnection* conn);
     void _ping_connection(IceConnection* conn);
+    void _maybe_switch_selected_connection(IceConnection* conn);
 
     // libev 定时器回调函数，声明为 friend 以访问私有成员 _on_check_and_ping
     friend void ice_ping_cb(EventLoop* /*el*/, TimerWatcher* /*w*/, void* data);

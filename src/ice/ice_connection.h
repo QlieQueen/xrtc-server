@@ -68,6 +68,7 @@ public:
     void maybe_set_remote_ice_params(const IceParameters& ice_params);
 
     void set_write_state(WriteState state); 
+    WriteState write_state() { return _write_state; }
     // 读写状态查询 — 用于 Controller 的 ping 决策和 Channel 的状态聚合
     bool writable() { return _write_state == STATE_WRITABLE; }
     bool receiving() { return _receiving; }

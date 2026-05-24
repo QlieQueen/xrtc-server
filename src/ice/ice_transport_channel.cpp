@@ -177,24 +177,50 @@ void IceTransportChannel::_on_unknown_address(UDPPort* port,
 }
 
 // ============================================================================
+// ============================================================================
 // IceTransportChannel::_add_connection — 注册连接到 controller
 //
-// 新创建的 IceConnection 注册到 IceController，后续参与 ping 决策和排序。
+// 新连接加入时:
+//   1. 监听其状态变化信号 → 一旦读写状态变更, 触发重新排序和选路
+//   2. 注册到 IceController → 参与 ping 决策和连接排序
 // ============================================================================
 void IceTransportChannel::_add_connection(IceConnection* conn) {
+    conn->signal_state_change.connect(this,
+        &IceTransportChannel::_on_connection_state_change);
     _ice_controller->add_connection(conn);
+}
+
+// ============================================================================
+// IceTransportChannel::_on_connection_state_change — 连接状态变化槽函数
+//
+// 由 IceConnection::signal_state_change 触发 (set_write_state / update_receiving 中发射)。
+// 每次连接读写状态变化时, 重新排序连接列表并根据排序结果决定是否切换 selected。
+// ============================================================================
+void IceTransportChannel::_on_connection_state_change(IceConnection* /*conn*/) {
+    _sort_connections_and_update_state();
 }
 
 // ============================================================================
 // IceTransportChannel::_sort_connections_and_update_state — 排序连接并更新状态
 //
 // 连接发生变化时（新增/状态变更）调用:
-//   1. _maybe_start_pinging — 可能首次启动连通性检查
-//   2. 后续 commit: _maybe_switch_selected_connection — 可能切换最优连接
+//   1. _maybe_switch_selected_connection — 按质量排序并可能切换最优连接
+//   2. _maybe_start_pinging — 可能首次启动连通性检查
 //   3. 后续 commit: _update_state — 更新 channel 的聚合状态
 // ============================================================================
 void IceTransportChannel::_sort_connections_and_update_state() {
+    _maybe_switch_selected_connection(_ice_controller->sort_and_switch_connection());
     _maybe_start_pinging();
+}
+
+// ============================================================================
+// IceTransportChannel::_maybe_switch_selected_connection — 可能切换最优连接
+//
+// 本 commit 为占位实现。后续 commit 将实现:
+//   根据排序结果比较当前 selected 与候选连接, 决定是否切换。
+// ============================================================================
+void IceTransportChannel::_maybe_switch_selected_connection(IceConnection* conn) {
+
 }
 
 // ============================================================================

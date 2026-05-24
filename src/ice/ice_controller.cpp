@@ -1,10 +1,69 @@
 #include "ice/ice_controller.h"
 
+#include <absl/algorithm/container.h>
 #include <rtc_base/time_utils.h>
 #include <rtc_base/logging.h>
 
 namespace xrtc {
 
+const int a_is_better = 1;
+const int b_is_better = -1;
+
+// ============================================================================
+// IceController::_compare_connections — 连接质量比较器 (4 级优先级)
+//
+// 用于 sort_and_switch_connection 排序 _connections 列表,
+// 最优连接排在前面。优先级从高到低:
+//   1. writable  > 非 writable     (能发数据是首要条件)
+//   2. write_state 值小的 > 值大的  (WRITABLE=0 最好, WRITE_TIMEOUT=3 最差)
+//   3. receiving > 非 receiving    (对端方向还活着)
+//   4. 以上都相等 → 返回 0 (stable_sort 保持原序)
+//
+// 返回值: a_is_better(1) / b_is_better(-1) / 0(相等)
+// ============================================================================
+int IceController::_compare_connections(IceConnection* a, IceConnection* b) {
+    if (a->writable() && !b->writable()) {
+        return a_is_better;
+    }
+
+    if (!a->writable() && b->writable()) {
+        return b_is_better;
+    }
+
+    if (a->write_state() < b->write_state()) {
+        return a_is_better;
+    }
+
+    if (a->write_state() > b->write_state()) {
+        return b_is_better;
+    }
+
+    if (a->receiving() && !b->receiving()) {
+        return a_is_better;
+    }
+
+    if (!a->receiving() && b->receiving()) {
+        return b_is_better;
+    }
+
+    return 0;
+}
+
+// ============================================================================
+// IceController::sort_and_switch_connection — 按质量排序连接列表
+//
+// 用 _compare_connections 对 _connections 做 stable_sort,
+// 排序后最优连接排到 _connections[0]。
+// "switch" 部分由调用方 _maybe_switch_selected_connection 负责 (本 commit 占位)。
+// ============================================================================
+IceConnection* IceController::sort_and_switch_connection() {
+    absl::c_stable_sort(_connections, [this](IceConnection* conn1, IceConnection* conn2) {
+        // 大于0，则conn1质量好; 否则, conn2质量好
+        return _compare_connections(conn1, conn2) > 0;
+    });
+
+    return nullptr;
+}
 // ============================================================================
 // IceController::has_pingable_connection — 检查是否存在可 ping 的连接
 //
