@@ -7,6 +7,7 @@
 #include "ice/stun.h"
 #include "ice/ice_credentials.h"
 #include "ice/stun_request.h"
+#include "ice/ice_connection_info.h"
 
 #include <rtc_base/third_party/sigslot/sigslot.h>
 
@@ -79,6 +80,9 @@ public:
     int rtt() { return _rtt; }
     bool selected() { return _selected; }
     void set_selected(bool selected) { _selected = selected; }
+    IceCandidatePairState state() const { return _state; }
+    void set_state(IceCandidatePairState state);
+    void destroy();
     void fail_and_destroy();
     
     bool weak() { return !(writable() && receiving()); }   // 双向都通才不是 weak
@@ -94,6 +98,7 @@ public:
 
 public:
     sigslot::signal1<IceConnection*> signal_state_change;
+    sigslot::signal1<IceConnection*> signal_connection_destroy;    // 连接销毁时通知 Channel 清理
 
 private:
     void _on_stun_send_packet(StunRequest* request, const char* buf, size_t size);
@@ -116,6 +121,7 @@ private:
     StunRequestManager _request_manager;                       // 管理 STUN 请求的发送与后续重传
     int _rtt = 3000;
     int _rtt_samples = 0; // 平滑算法采样数
+    IceCandidatePairState _state = IceCandidatePairState::WAITING;  // RFC 5245 candidate pair 状态
 };
 
 } // namespace xrtc

@@ -117,6 +117,26 @@ void IceController::mark_connection_pinged(IceConnection* conn) {
 }
 
 // ============================================================================
+// IceController::on_connection_destroyed — 连接销毁时的清理
+//
+// 从 pinged/unpinged/connections 三个集合中移除，确保后续 ping 选择和
+// 排序不会引用野指针。
+// ============================================================================
+void IceController::on_connection_destroyed(IceConnection* conn) {
+    _pinged_connections.erase(conn);
+    _unpinged_connections.erase(conn);
+
+    auto iter = _connections.begin();
+    for (; iter != _connections.end(); ++iter) {
+        if (*iter == conn) {
+            _connections.erase(iter);
+            break;
+        }
+    }
+}
+
+
+// ============================================================================
 // IceController::has_pingable_connection — 检查是否存在可 ping 的连接
 //
 // 遍历所有连接，只要有一个满足 _is_pingable 条件就返回 true。

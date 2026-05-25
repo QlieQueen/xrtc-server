@@ -163,8 +163,39 @@ void IceConnection::on_connection_request_response(ConnectionRequest* request, S
     received_ping_response(rtt);
 }
 
-void IceConnection::fail_and_destroy() {
+// ============================================================================
+// IceConnection::set_state — 更新 Candidate pair 状态 (RFC 5245)
+//
+// 状态流转:
+//   WAITING → IN_PROGRESS (发出 ping)
+//   IN_PROGRESS → SUCCEEDED (收到回复)
+//   任意状态 → FAILED (确认不通) → destroy()
+// 仅当状态实际变化时才打日志。
+// ============================================================================
+void IceConnection::set_state(IceCandidatePairState state) {
+    IceCandidatePairState old_state = _state;
+    if (old_state != state) {
+        _state = state;
+        RTC_LOG(LS_INFO) << to_string() << ": set_state " << old_state
+            << "->" << _state;
+    }
+}
 
+// ============================================================================
+// IceConnection::destroy — 销毁连接
+//
+// 发射 signal_connection_destroy 通知 Channel 清理引用，然后 delete this。
+// 只能由 fail_and_destroy() 调用，不应直接调用。
+// ============================================================================
+void IceConnection::destroy() {
+    RTC_LOG(LS_INFO) << to_string() << ": Connection destroyed";
+    signal_connection_destroy(this);
+    delete this;
+}
+
+void IceConnection::fail_and_destroy() {
+    set_state(IceCandidatePairState::FAILED);
+    destroy();
 }
 
 // ============================================================================
@@ -231,6 +262,7 @@ void IceConnection::ping(int64_t now) {
     RTC_LOG(LS_INFO) << to_string() << ": Sending STUN ping, id="
         << rtc::hex_encode(request->id());
     _request_manager.send(request);
+    set_state(IceCandidatePairState::IN_PROGRESS);
     _num_pings_sent++;
 }
 
@@ -346,6 +378,7 @@ void IceConnection::received_ping_response(int rtt) {
     _pings_since_last_responses.clear();
     update_receiving(_last_ping_response_received);
     set_write_state(STATE_WRITABLE);
+    set_state(IceCandidatePairState::SUCCEEDED);
 }
 
 std::string IceConnection::to_string() {

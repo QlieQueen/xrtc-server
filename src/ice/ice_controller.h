@@ -46,6 +46,7 @@ public:
     IceConnection* sort_and_switch_connection();
     void set_selected_connection(IceConnection* conn) { _selected_connection = conn; }
     void mark_connection_pinged(IceConnection* ping);
+    void on_connection_destroyed(IceConnection* conn);   // 从所有集合中移除已销毁的连接
 
 private:
     // channel weak = 没有 selected connection 或 selected connection 不通畅

@@ -187,6 +187,8 @@ void IceTransportChannel::_on_unknown_address(UDPPort* port,
 void IceTransportChannel::_add_connection(IceConnection* conn) {
     conn->signal_state_change.connect(this,
         &IceTransportChannel::_on_connection_state_change);
+    conn->signal_connection_destroy.connect(this,
+        &IceTransportChannel::_on_connection_destroyed);
     _ice_controller->add_connection(conn);
 }
 
@@ -198,6 +200,27 @@ void IceTransportChannel::_add_connection(IceConnection* conn) {
 // ============================================================================
 void IceTransportChannel::_on_connection_state_change(IceConnection* /*conn*/) {
     _sort_connections_and_update_state();
+}
+
+
+// ============================================================================
+// IceTransportChannel::_on_connection_destroyed — 连接销毁回调
+//
+// 由 IceConnection::signal_connection_destroy 触发。
+// 从 controller 清理引用；若被销毁的是 selected connection 则清空并重新选路。
+// ============================================================================
+void IceTransportChannel::_on_connection_destroyed(IceConnection* conn) {
+    _ice_controller->on_connection_destroyed(conn);
+    RTC_LOG(LS_INFO) << to_string() << ": Remove connection: " << conn
+        << " with " << _ice_controller->connections().size() << " remaining";
+    if (_selected_connection == conn) {
+        RTC_LOG(LS_INFO) << to_string() 
+            << ": Selected connection destroyed, should select a new connection";
+        _switch_selected_connection(nullptr);
+        _sort_connections_and_update_state();
+    } else {
+        // todo
+    }
 }
 
 // ============================================================================
@@ -214,28 +237,42 @@ void IceTransportChannel::_sort_connections_and_update_state() {
 }
 
 // ============================================================================
-// IceTransportChannel::_maybe_switch_selected_connection — 执行 selected 连接切换
+// IceTransportChannel::_maybe_switch_selected_connection — 非空包装
 //
-// 当 sort_and_switch_connection 返回非空连接时调用。
-// 切换时: 清除旧连接的 _selected 标记 → 设置新连接的 _selected 标记
-// → 更新 channel 和 controller 的 _selected_connection 引用。
+// 仅当 sort_and_switch_connection 返回非空连接时才执行切换。
+// 实际切换逻辑在 _switch_selected_connection。
 // ============================================================================
 void IceTransportChannel::_maybe_switch_selected_connection(IceConnection* conn) {
     if (!conn) {
         return;
     }
 
+    _switch_selected_connection(conn);
+}
+
+// ============================================================================
+// IceTransportChannel::_switch_selected_connection — 执行 selected 切换
+//
+// 更新旧/新连接的 _selected 标记，更新 channel 和 controller 的引用。
+// conn 为 nullptr 时表示清空 selected (如当前 selected 被销毁)。
+// ============================================================================
+void IceTransportChannel::_switch_selected_connection(IceConnection* conn) {
     IceConnection* old_selected_connection = _selected_connection;
+    _selected_connection = conn;
     if (old_selected_connection) {
         old_selected_connection->set_selected(false);
         RTC_LOG(LS_INFO) << to_string() << ": previous connection: "
             << old_selected_connection->to_string();
     }
 
+    if (!_selected_connection) {
+        RTC_LOG(LS_INFO) << to_string() << ": No connection selected";
+        return;
+    }
+
     RTC_LOG(LS_INFO) << to_string() << ": New selected connection: "
         << conn->to_string();
 
-    _selected_connection = conn;
     _selected_connection->set_selected(true);
     _ice_controller->set_selected_connection(_selected_connection);
 }
