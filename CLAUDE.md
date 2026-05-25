@@ -213,7 +213,7 @@ Parsed via `yaml-cpp` into `GeneralConf` / `SignalingServerOptions` / `RtcServer
 ### Phase 9 当前进度
 
 - **参考项目**: `/home/ydqun/workspace/webrtc/xrtcserver`, commits `a0bdda8` → `9bb997d` (21 个)
-- **已完成**: 17/21 commits
+- **已完成**: 18/21 commits
   - ✅ commit 1: UDP 高性能发送 (用户提前实现)
   - ✅ commit 2: ICE 连接保活 (用户提前实现)
   - ✅ commit 3: StunErrorCodeAttribute + send_binding_error_response (`1.5.52`)
@@ -222,7 +222,8 @@ Parsed via `yaml-cpp` into `GeneralConf` / `SignalingServerOptions` / `RtcServer
   - ✅ commit 6: ICE 连接 ping 优先级选择 — 两层限速 + 自适应退避 (`1.5.54`)
   - ✅ commit 7: 选择一个连接执行 ping — round-robin 公平选择 (`1.5.55`)
   - ✅ commit 8: 构造 STUN 绑定请求 — ConnectionRequest::prepare (`1.5.56`)
-  - ✅ commit 9: ICE 普通提名和积极提名 — USE-CANDIDATE (`1.5.57`)
+  - ✅ commit 17: STUN 错误响应处理 — on_connection_request_error_response + 内存泄漏修复 + mark_connection_pinged (`1.5.65`)
+  - ✅ commit 18: 设置 Candidate pair 状态 — IceCandidatePairState 枚举 + 状态流转 + 销毁链路 (`1.5.66`)  - ✅ commit 9: ICE 普通提名和积极提名 — USE-CANDIDATE (`1.5.57`)
   - ✅ commit 10: 发送 STUN ping 请求 — signal/slot 发送链路 (`1.5.58`)
   - ✅ commit 11: 处理 STUN 响应 — check_response 匹配分发 + MI 校验 (`1.5.59`)
   - ✅ commit 12: RTT 计算与 ping 日志 — elapsed() + print_pings_since_last_response (`1.5.60`)
@@ -230,5 +231,5 @@ Parsed via `yaml-cpp` into `GeneralConf` / `SignalingServerOptions` / `RtcServer
   - ✅ commit 14: 选中连接切换策略 — sort_and_switch_connection + _compare_connections 4级优先级 + signal_state_change 链路 (`1.5.62`)
   - ✅ commit 15: RTT 指数平滑 + RFC 5245 pair priority + _compare_connections 第5级 + RTT fallback (`1.5.63`)
   - ✅ commit 17: STUN 错误响应处理 — on_connection_request_error_response + 内存泄漏修复 + mark_connection_pinged (`1.5.65`)
-- **下一步**: commit 18 `b808117` — 设置 Candidate pair 状态
+- **下一步**: commit 19 `63b5f45` — 处理 ICE ping 周期问题
 - **知识文档**: `note/phase9-background.md`, `note/phase9-connectivity-check-concepts.md`
