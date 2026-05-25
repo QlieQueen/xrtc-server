@@ -230,6 +230,8 @@ Parsed via `yaml-cpp` into `GeneralConf` / `SignalingServerOptions` / `RtcServer
   - ✅ commit 13: ICE 连接读写状态更新 — received_ping_response + update_receiving + set_write_state + signal_state_change (`1.5.61`)
   - ✅ commit 14: 选中连接切换策略 — sort_and_switch_connection + _compare_connections 4级优先级 + signal_state_change 链路 (`1.5.62`)
   - ✅ commit 15: RTT 指数平滑 + RFC 5245 pair priority + _compare_connections 第5级 + RTT fallback (`1.5.63`)
+  - ✅ commit 16: 开始切换 selected 连接 — _ready_to_send + _maybe_switch_selected_connection (`1.5.64`)
   - ✅ commit 17: STUN 错误响应处理 — on_connection_request_error_response + 内存泄漏修复 + mark_connection_pinged (`1.5.65`)
+  - ✅ commit 18: 设置 Candidate pair 状态 — IceCandidatePairState 枚举 + 状态流转 + 销毁链路 (`1.5.66`)
 - **下一步**: commit 19 `63b5f45` — 处理 ICE ping 周期问题
 - **知识文档**: `note/phase9-background.md`, `note/phase9-connectivity-check-concepts.md`
