@@ -488,6 +488,16 @@ const StunUint32Attribute* StunMessage::get_uint32_t(uint16_t type) {
     return static_cast<const StunUint32Attribute*>(_get_attribute(type));
 }
 
+const StunErrorCodeAttribute* StunMessage::get_error_code() {
+    return static_cast<const StunErrorCodeAttribute*>(
+            _get_attribute(STUN_ATTR_ERROR_CODE));
+}
+
+int StunMessage::get_error_code_value() {
+    auto attr_error_code = get_error_code();
+    return attr_error_code ? attr_error_code->code() : STUN_ERROR_GLOBAL_FAIL;
+}
+
 // ============================================================================
 // StunMessage::_get_attribute — 遍历查找属性
 //
@@ -864,6 +874,10 @@ StunErrorCodeAttribute::StunErrorCodeAttribute(uint16_t type, uint16_t length) :
 void StunErrorCodeAttribute::set_code(int code) {
     _class = code / 100;    // 百位: 401 / 100 = 4
     _number = code % 100;   // 十位+个位: 401 % 100 = 1
+}
+
+int StunErrorCodeAttribute::code() const {
+    return _class * 100 + _number;
 }
 
 void StunErrorCodeAttribute::set_reason(const std::string& reason) {

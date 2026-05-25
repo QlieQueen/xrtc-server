@@ -4,6 +4,7 @@
 #include <rtc_base/logging.h>
 #include <rtc_base/time_utils.h>
 #include <rtc_base/helpers.h>
+#include <rtc_base/string_encode.h>
 
 #include "ice/stun_request.h"
 
@@ -162,6 +163,10 @@ void IceConnection::on_connection_request_response(ConnectionRequest* request, S
     received_ping_response(rtt);
 }
 
+void IceConnection::fail_and_destroy() {
+
+}
+
 // ============================================================================
 // IceConnection::on_connection_request_error_response — 处理 STUN 错误响应
 //
@@ -170,7 +175,21 @@ void IceConnection::on_connection_request_response(ConnectionRequest* request, S
 // ============================================================================
 void IceConnection::on_connection_request_error_response(ConnectionRequest* request, StunMessage* msg) {
     // TODO: 错误响应处理 (后续 commit)
-    RTC_LOG(LS_WARNING) << "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~";
+    int rtt = request->elapsed();
+    int error_code = msg->get_error_code_value();
+    RTC_LOG(LS_INFO) << to_string() << ": Received "
+        << stun_method_to_string(msg->type())
+        << ", id=" << rtc::hex_encode(msg->transaction_id())
+        << ", rtt=" << rtt
+        << ", error code=" << error_code;
+    if (error_code == STUN_ERROR_BAD_REQUEST ||
+            error_code == STUN_ERROR_UNAUTHORIZED ||
+            error_code == STUN_ERROR_SERVER_ERROR)
+    {
+        // todo: retry maybe recover
+    } else {
+        fail_and_destroy();
+    }
 }
 
 // ============================================================================

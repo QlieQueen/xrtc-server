@@ -241,8 +241,6 @@ bool UDPPort::_parse_stun_username(StunMessage* stun_msg, std::string* local_ufr
     *local_ufrag = fields[0];
     *remote_ufrag = fields[1];
 
-    RTC_LOG(LS_WARNING) << "================local ufrag: " << *local_ufrag
-                        << ", remote ufrag: " << *remote_ufrag;
     return true;
 }
 

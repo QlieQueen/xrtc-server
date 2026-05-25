@@ -18,9 +18,11 @@ class StunRequest;
 class StunRequestManager {
 public:
     StunRequestManager() = default;
-    ~StunRequestManager() = default;
+    ~StunRequestManager();
 
     void send(StunRequest* request);
+
+    void remove(StunRequest* request);
 
     // STUN 响应匹配: 用 transaction_id 查找对应 request，验证响应类型后分发
     // 返回 true = 找到了对应的 request (无论类型匹配与否)

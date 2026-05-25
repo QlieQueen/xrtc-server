@@ -109,6 +109,13 @@ IceConnection* IceController::sort_and_switch_connection() {
 
     return nullptr;
 }
+
+void IceController::mark_connection_pinged(IceConnection* conn) {
+    if (conn && _pinged_connections.insert(conn).second) {
+        _unpinged_connections.erase(conn);
+    }
+}
+
 // ============================================================================
 // IceController::has_pingable_connection — 检查是否存在可 ping 的连接
 //

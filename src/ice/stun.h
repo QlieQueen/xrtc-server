@@ -97,7 +97,9 @@ enum StunAttributeType {
 enum StunErrorCode {
     STUN_ERROR_BAD_REQUEST = 400,
     STUN_ERROR_UNAUTHORIZED = 401,
-    STUN_ERROR_SERVER_ERROR = 500
+    STUN_ERROR_UNKNOWN_ATTRIBUTE = 402,
+    STUN_ERROR_SERVER_ERROR = 500,
+    STUN_ERROR_GLOBAL_FAIL = 600
 };
 
 // STUN 地址属性中的 Address Family 字段 (1 字节)
@@ -197,7 +199,8 @@ public:
     const StunByteStringAttribute* get_byte_string(uint16_t type);
     // 获取制定 type 的 Uint32 属性 （用于 PRIORITY）
     const StunUint32Attribute* get_uint32_t(uint16_t type);
-
+    const StunErrorCodeAttribute* get_error_code();
+    int get_error_code_value();
 
 private:
     // 工厂方法: 根据 type + length 创建对应的 StunAttribute 子类
@@ -388,6 +391,7 @@ public:
     ~StunErrorCodeAttribute() override = default;
 
     void set_code(int code);
+    int code() const;
     void set_reason(const std::string& reason);
 
     bool read(rtc::ByteBufferReader* buf) override;

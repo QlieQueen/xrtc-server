@@ -9,6 +9,14 @@
 
 namespace xrtc {
 
+StunRequestManager::~StunRequestManager() {
+    while (_requests.begin() != _requests.end()) {
+        StunRequest* request = _requests.begin()->second;
+        _requests.erase(_requests.begin());
+        delete request;
+    }
+}
+
 // ============================================================================
 // StunRequestManager::send — 发送 STUN 请求
 //
@@ -23,6 +31,13 @@ void StunRequestManager::send(StunRequest* request) {
     request->set_manager(this);
     _requests[request->id()] = request;
     request->send();
+}
+
+void StunRequestManager::remove(StunRequest* request) {
+    auto iter = _requests.find(request->id());
+    if (iter != _requests.end()) {
+        _requests.erase(iter);
+    }
 }
 
 // ============================================================================
@@ -58,8 +73,11 @@ bool StunRequestManager::check_response(StunMessage* msg) {
     } else {
         RTC_LOG(LS_WARNING) << "Received Stun Binding response with wrong type="
             << msg->type() << ", id=" << msg->transaction_id();
+        delete request;
+        return false;
     }
 
+    delete request;
     return true;
 }
 
@@ -138,6 +156,10 @@ StunRequest::StunRequest(StunMessage* msg) :
 }
 
 StunRequest::~StunRequest() {
+    if (_manager) {
+        _manager->remove(this);
+    }
+
     if (_msg) {
         delete _msg;
         _msg = nullptr;

@@ -285,7 +285,9 @@ void IceTransportChannel::_on_check_and_ping() {
         << ", ping interval: " << result.ping_interval;
 
     if (result.conn) {
-        _ping_connection(const_cast<IceConnection*>(result.conn));
+        IceConnection* conn = const_cast<IceConnection*>(result.conn);
+        _ping_connection(conn);
+        _ice_controller->mark_connection_pinged(conn);
     }
 
     // ping_interval 变化时重启定时器: 降级加速 / 升级减速

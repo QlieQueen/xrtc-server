@@ -45,6 +45,7 @@ public:
     PingResult select_connection_to_ping(int64_t last_ping_sent_ms);
     IceConnection* sort_and_switch_connection();
     void set_selected_connection(IceConnection* conn) { _selected_connection = conn; }
+    void mark_connection_pinged(IceConnection* ping);
 
 private:
     // channel weak = 没有 selected connection 或 selected connection 不通畅

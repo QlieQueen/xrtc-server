@@ -79,6 +79,7 @@ public:
     int rtt() { return _rtt; }
     bool selected() { return _selected; }
     void set_selected(bool selected) { _selected = selected; }
+    void fail_and_destroy();
     
     bool weak() { return !(writable() && receiving()); }   // 双向都通才不是 weak
     bool active() { return _write_state != STATE_WRITE_TIMEOUT; }  // 没超时就是活跃的
