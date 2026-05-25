@@ -77,6 +77,8 @@ public:
     int receiving_timeout();
     uint64_t priority();
     int rtt() { return _rtt; }
+    bool selected() { return _selected; }
+    void set_selected(bool selected) { _selected = selected; }
     
     bool weak() { return !(writable() && receiving()); }   // 双向都通才不是 weak
     bool active() { return _write_state != STATE_WRITE_TIMEOUT; }  // 没超时就是活跃的
@@ -102,6 +104,7 @@ private:
 
     WriteState _write_state = STATE_WRITE_INIT;
     bool _receiving = false;
+    bool _selected = false;     // 当前是否被 channel 选为 selected connection
 
     int64_t _last_ping_sent = 0;
     int64_t _last_ping_response_received = 0;

@@ -6,6 +6,9 @@
 
 namespace xrtc {
 
+// 最小 RTT 改善阈值 (ms): 新 top connection 的 RTT 必须比当前 selected
+// 至少小 10ms 才会触发切换，防止因微小抖动来回震荡 (ping-pong switching)
+const int k_min_inprovement = 10;
 const int a_is_better = 1;
 const int b_is_better = -1;
 
@@ -58,13 +61,23 @@ int IceController::_compare_connections(IceConnection* a, IceConnection* b) {
     return 0;
 }
 
+bool IceController::_ready_to_send(IceConnection* conn) {
+    return conn && (conn->writable() ||
+            conn->write_state() == IceConnection::STATE_WRITE_UNRELIABLE);
+}
+
 // ============================================================================
-// IceController::sort_and_switch_connection — 按质量排序连接列表
+// IceController::sort_and_switch_connection — 排序连接并决定是否切换
 //
-// 用 _compare_connections 对 _connections 做 stable_sort,
-// 排序后最优连接排到 _connections[0]。
-// 当 _compare_connections 返回 0 (所有条件相等) 时, 取 RTT 更小的连接。
-// "switch" 部分由调用方 _maybe_switch_selected_connection 负责 (本 commit 占位)。
+// 1. 用 _compare_connections (5级优先级) + RTT fallback 对 _connections 排序
+// 2. 排序后检查 top connection 是否值得切换:
+//    a. 如果 top 不能发数据 (_ready_to_send false) 或已是 selected → 不切
+//    b. 如果尚无 selected connection → 直接选 top (冷启动)
+//    c. 如果有 selected → 仅当 top RTT 比当前至少小 k_min_improvement 才切
+//       (防止 ping-pong switching)
+//
+// 返回: 值得切换到的连接; nullptr 表示无需切换。
+// 实际切换由调用方 _maybe_switch_selected_connection 负责。
 // ============================================================================
 IceConnection* IceController::sort_and_switch_connection() {
     absl::c_stable_sort(_connections, [this](IceConnection* conn1, IceConnection* conn2) {
@@ -75,6 +88,24 @@ IceConnection* IceController::sort_and_switch_connection() {
         }
         return conn1->rtt() < conn2->rtt();
     });
+
+    RTC_LOG(LS_INFO) << "Sort " << _connections.size() << " available connections: ";
+    for (auto conn : _connections) {
+        RTC_LOG(LS_INFO) << conn->to_string();
+    }
+
+    IceConnection* top_connection = _connections.empty() ? nullptr : _connections[0];
+    if (!_ready_to_send(top_connection) || _selected_connection == top_connection) {
+        return nullptr;
+    }
+
+    if (!_selected_connection) {
+        return top_connection;
+    }
+
+    if (top_connection->rtt() <= _selected_connection->rtt() - k_min_inprovement) {
+        return top_connection;
+    }
 
     return nullptr;
 }

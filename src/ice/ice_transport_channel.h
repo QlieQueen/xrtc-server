@@ -63,6 +63,7 @@ private:
     TimerWatcher* _ping_watcher = nullptr;           // 周期性 ping 定时器 (libev repeating timer)
     int _cur_ping_interval = WEAK_PING_INTERVAL;
     int64_t _last_ping_sent_ms = 0;
+    IceConnection* _selected_connection = nullptr;
 };
 
 

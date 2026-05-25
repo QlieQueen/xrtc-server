@@ -214,13 +214,30 @@ void IceTransportChannel::_sort_connections_and_update_state() {
 }
 
 // ============================================================================
-// IceTransportChannel::_maybe_switch_selected_connection — 可能切换最优连接
+// IceTransportChannel::_maybe_switch_selected_connection — 执行 selected 连接切换
 //
-// 本 commit 为占位实现。后续 commit 将实现:
-//   根据排序结果比较当前 selected 与候选连接, 决定是否切换。
+// 当 sort_and_switch_connection 返回非空连接时调用。
+// 切换时: 清除旧连接的 _selected 标记 → 设置新连接的 _selected 标记
+// → 更新 channel 和 controller 的 _selected_connection 引用。
 // ============================================================================
 void IceTransportChannel::_maybe_switch_selected_connection(IceConnection* conn) {
+    if (!conn) {
+        return;
+    }
 
+    IceConnection* old_selected_connection = _selected_connection;
+    if (old_selected_connection) {
+        old_selected_connection->set_selected(false);
+        RTC_LOG(LS_INFO) << to_string() << ": previous connection: "
+            << old_selected_connection->to_string();
+    }
+
+    RTC_LOG(LS_INFO) << to_string() << ": New selected connection: "
+        << conn->to_string();
+
+    _selected_connection = conn;
+    _selected_connection->set_selected(true);
+    _ice_controller->set_selected_connection(_selected_connection);
 }
 
 // ============================================================================
