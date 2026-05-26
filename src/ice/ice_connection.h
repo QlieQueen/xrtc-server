@@ -77,7 +77,7 @@ public:
     void update_receiving(int64_t now);
     int receiving_timeout();
     uint64_t priority();
-    int rtt() { return _rtt; }
+    int rtt() const { return _rtt; }
     bool selected() { return _selected; }
     void set_selected(bool selected) { _selected = selected; }
     IceCandidatePairState state() const { return _state; }
@@ -102,6 +102,7 @@ public:
 
 private:
     void _on_stun_send_packet(StunRequest* request, const char* buf, size_t size);
+    bool _miss_response(int64_t now) const;   // 是否有 ping 等待超过 2*rtt 未回复
 
 private:
     EventLoop* _el;

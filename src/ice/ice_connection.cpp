@@ -240,9 +240,31 @@ void IceConnection::maybe_set_remote_ice_params(const IceParameters& ice_params)
     }
 }
 
+// ============================================================================
+// IceConnection::stable — 连接是否稳定 (RTT 样本充足且无丢包)
+//
+// 条件: RTT 样本数 > 4 (至少 5 次采样，确保平滑值可靠)
+//       且当前没有 ping 等待超过 2*RTT (无丢包/严重延迟)
+// 影响: stable=true → ping 间隔从 900ms 升到 2500ms
+// ============================================================================
 bool IceConnection::stable(int64_t now) const {
-    // todo
-    return false;
+    return _rtt_samples > RTT_RATIO + 1 && !_miss_response(now);
+}
+
+// ============================================================================
+// IceConnection::_miss_response — 是否有 ping 超时未回复
+//
+// 检查最早的未收到回复的 ping，等待时间 > 2 * rtt 视为丢失。
+// 如果最近没有未回复的 ping (空队列)，返回 false (没丢包)。
+// ============================================================================
+bool IceConnection::_miss_response(int64_t now) const {
+    if (_pings_since_last_responses.empty()) {
+        return false;
+    }
+
+    int waiting = now - _pings_since_last_responses[0].sent_time;
+
+    return waiting > 2 * _rtt;
 }
 
 // ============================================================================
@@ -373,6 +395,8 @@ void IceConnection::received_ping_response(int rtt) {
     } else {
         _rtt = rtt;
     }
+
+    ++_rtt_samples;
 
     _last_ping_response_received = rtc::TimeMillis();
     _pings_since_last_responses.clear();

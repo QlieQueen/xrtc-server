@@ -143,8 +143,9 @@ void IceController::on_connection_destroyed(IceConnection* conn) {
 // 用于 _maybe_start_pinging: 首次发现可 ping 连接时启动连通性检查。
 // ============================================================================
 bool IceController::has_pingable_connection() {
+    int64_t now = rtc::TimeMillis();
     for (auto conn : _connections) {
-        if (_is_pingable(conn)) {
+        if (_is_pingable(conn, now)) {
             return true;
         }
     }
@@ -168,21 +169,16 @@ void IceController::add_connection(IceConnection* conn) {
 // ============================================================================
 // IceController::_is_pingable — 判断连接是否可以发送 ping
 //
-// 条件:
-//   1. 对端的 ice_ufrag 和 ice_pwd 必须已知 (否则无法构造 STUN 请求)
-//      STUN ping 可能比 SDP answer 更快到达，此时 remote_ice_params 尚未设置
-//   2. Channel 为 weak 状态 → 需要积极探测来找更好的连接
+// 三级判断:
+//   1. 对端 ice_ufrag / ice_pwd 必须已知 → 否则无法构造 STUN 请求
+//   2. Channel 为 weak → 紧急模式，跳过间隔限制，所有有凭据的连接均可 ping
+//   3. Channel strong → 按单连接自己的 ping 间隔判断
+//      (_is_connection_past_ping_interval: 新连接 48ms / 不稳定 900ms / 稳定 2500ms)
 //
-// 为什么每检查一个 conn 都要判断 _weak()？
-//   _weak() 检查的是 selected connection (当前用于发送数据的连接)，
-//   不是正在遍历的这个 conn。它是 channel 级别的"紧急信号"：
-//   - Channel 健康时: selected connection 双向通畅，不急于 ping，
-//     可以等 ping 间隔到了再发 (后续 commit 补充 _is_connection_past_ping_interval)
-//   - Channel weak 时: selected connection 断开或不存在，
-//     需要加速探测所有候选连接以尽快找到替代路径，
-//     此时跳过间隔限制，所有有凭据的连接都立即视为可 ping
+// 注意: round-robin 选择循环中用此方法过滤不可 ping 的连接，
+//       _weak() 只是"跳过间隔检查"的通行证，不是唯一 gate。
 // ============================================================================
-bool IceController::_is_pingable(IceConnection* conn) {
+bool IceController::_is_pingable(IceConnection* conn, int64_t now) {
     const Candidate& remote = conn->remote_candidate();
     if (remote.username.empty() || remote.password.empty()) {
         RTC_LOG(LS_WARNING) << "remote ICE ufrag and pwd is empty, cannot ping.";
@@ -194,7 +190,7 @@ bool IceController::_is_pingable(IceConnection* conn) {
         return true;   // 跳过 ping 间隔限制，所有候选连接均可 ping
     }
 
-    return false;      // channel strong → 按 ping 间隔限制 (后续 commit 补充)
+    return _is_connection_past_ping_interval(conn, now);      // channel strong → 按 ping 间隔限制 (后续 commit 补充)
 }
 
 // ============================================================================
@@ -248,10 +244,10 @@ PingResult IceController::select_connection_to_ping(int64_t last_ping_sent_ms) {
 //      - _unpinged_connections: 本轮尚未 ping 的连接
 //      - _pinged_connections:   本轮已 ping 过的连接
 //      - 当 unpinged 中无可 ping 连接时 → pinged 全部倒回 unpinged，开始新一轮
-//      - 用 _more_pingable 选出最久未 ping 的连接 (最 overdue 优先)
+//      - 用 _is_pingable 过滤掉间隔未到的连接 → _more_pingable 选最 overdue
 //
 // 注意: 被选中的连接不会立即从 unpinged 移除，
-//       要等实际 ping 发出后才移到 pinged (后续 commit)。
+//       要等实际 ping 发出后才通过 mark_connection_pinged 移到 pinged。
 // ============================================================================
 const IceConnection* IceController::_find_next_pingable_connection(int64_t now) {
     if (_selected_connection && _selected_connection->writable() &&
@@ -262,7 +258,7 @@ const IceConnection* IceController::_find_next_pingable_connection(int64_t now) 
 
     bool has_pingable = false;
     for (auto conn : _unpinged_connections) {
-        if (_is_pingable(conn)) {
+        if (_is_pingable(conn, now)) {
             has_pingable = true;
             break;
         }
@@ -276,6 +272,10 @@ const IceConnection* IceController::_find_next_pingable_connection(int64_t now) 
 
     IceConnection* find_conn = nullptr;
     for (auto conn : _unpinged_connections) {
+        if (!_is_pingable(conn, now)) {
+            continue;
+        }
+
         if (_more_pingable(conn, find_conn)) {
             find_conn = conn;
         }
@@ -320,6 +320,9 @@ bool IceController::_is_connection_past_ping_interval(const IceConnection* conn,
         int64_t now)
 {
     int interval = _get_connection_ping_interval(conn, now);
+    RTC_LOG(LS_INFO) << "=======================conn: " << conn
+        << ", conn ping interval: " << interval
+        << ", last_ping_sent: " << conn->last_ping_sent();
     return now >= conn->last_ping_sent() + interval;
 }
 
@@ -336,14 +339,14 @@ int IceController::_get_connection_ping_interval(const IceConnection* conn,
         int64_t now)
 {
     if (conn->num_pings_sent() < MIN_PINGS_AT_WEAK_PING_INTERVAL) {
-        return WEAK_PING_INTERVAL;
+        return WEAK_PING_INTERVAL;  // 48ms
     }
 
     if (_weak() || !conn->stable(now)) {
-        return STABLING_CONNECTION_PING_INTERVAL;
+        return STABLING_CONNECTION_PING_INTERVAL;  // 900ms
     }
 
-    return STABLE_CONNECTION_PING_INTERVAL;
+    return STABLE_CONNECTION_PING_INTERVAL;  // 2500ms
 }
 
 } // namespace xrtc
