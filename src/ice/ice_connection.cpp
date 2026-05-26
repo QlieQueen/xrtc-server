@@ -17,6 +17,8 @@ namespace xrtc {
 // 避免单次测量波动导致 RTT 抖动过大。
 // ============================================================================
 const int RTT_RATIO = 3;
+const int MIN_RTT = 100; // 100ms
+const int MAX_RTT = 60000; // 60s
 
 IceConnection::IceConnection(EventLoop* el, UDPPort* port, const Candidate& remote_candidate) :
     _el(el), _port(port), _remote_candidate(remote_candidate)
@@ -196,6 +198,77 @@ void IceConnection::destroy() {
 void IceConnection::fail_and_destroy() {
     set_state(IceCandidatePairState::FAILED);
     destroy();
+}
+
+// ============================================================================
+// IceConnection::_too_many_ping_failed — 连续 ping 失败次数是否达阈值
+//
+// 取第 max_pings 个未回复 ping，计算其期望响应时间:
+//   expected_response_time = sent_time + rtt (rtt = 2 * _rtt 作为容忍窗口)
+// 若 now > expected_response_time，说明该 ping 已超时 → 连续失败达阈值。
+// ============================================================================
+bool IceConnection::_too_many_ping_failed(size_t max_pings, int rtt, int64_t now) {
+    if (_pings_since_last_responses.size() < max_pings) {
+        return false;
+    }
+
+    int expected_response_time = _pings_since_last_responses[max_pings - 1].sent_time + rtt;
+    return now > expected_response_time;
+}
+
+// ============================================================================
+// IceConnection::_too_long_without_response — 最早未回复 ping 是否超时
+//
+// 检查 _pings_since_last_responses[0] (最旧未回复 ping) 的等待时间。
+// now > sent_time + min_time → 超时。
+// ============================================================================
+bool IceConnection::_too_long_without_response(int min_time, int64_t now) {
+    if (_pings_since_last_responses.empty()) {
+        return false;
+    }
+
+    return now > _pings_since_last_responses[0].sent_time + min_time;
+}
+
+// ============================================================================
+// IceConnection::update_state — 连接探活: 根据 ping 响应历史降级 write state
+//
+// 两阶段退化:
+//   1. WRITABLE → WRITE_UNRELIABLE: >=5 个连续 ping 无回复 且 等待 >5s
+//   2. WRITE_UNRELIABLE / WRITE_INIT → WRITE_TIMEOUT: 等待 >15s 无回复
+//
+// RTT 容忍窗口 = 2 * _rtt，钳位在 [MIN_RTT=100ms, MAX_RTT=60000ms]。
+// 每次调用末尾 update_receiving 同步对端方向存活状态。
+// ============================================================================
+void IceConnection::update_state(int64_t now) {
+    int rtt = 2 * _rtt;
+    if (rtt < MIN_RTT) {
+        rtt = MIN_RTT;
+    } else if (rtt > MAX_RTT) {
+        rtt = MAX_RTT;
+    }
+
+    if (_write_state == STATE_WRITABLE &&
+            _too_many_ping_failed(CONNECTION_WRITE_CONNECT_FAILS, rtt, now) &&
+            _too_long_without_response(CONNECTION_WRITE_CONNECT_TIMEOUT, now))
+    {
+        RTC_LOG(LS_INFO) << to_string() << ": UnWritable after "
+            << CONNECTION_WRITE_CONNECT_FAILS << " ping fails and "
+            << now - _pings_since_last_responses[0].sent_time
+            << "ms without a response.";
+        set_write_state(STATE_WRITE_UNRELIABLE);       
+    }
+
+    if ((_write_state == STATE_WRITE_UNRELIABLE || _write_state == STATE_WRITE_INIT) &&
+            _too_long_without_response(CONNECTION_WRITE_TIMEOUT, now))
+    {
+        RTC_LOG(LS_INFO) << to_string() << ": Timeout after "
+            << now - _pings_since_last_responses[0].sent_time
+            << "ms without a response";
+        set_write_state(STATE_WRITE_TIMEOUT);        
+    }
+
+    update_receiving(now);
 }
 
 // ============================================================================

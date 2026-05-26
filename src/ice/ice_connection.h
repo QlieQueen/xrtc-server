@@ -84,6 +84,7 @@ public:
     void set_state(IceCandidatePairState state);
     void destroy();
     void fail_and_destroy();
+    void update_state(int64_t now);
     
     bool weak() { return !(writable() && receiving()); }   // 双向都通才不是 weak
     bool active() { return _write_state != STATE_WRITE_TIMEOUT; }  // 没超时就是活跃的
@@ -103,6 +104,8 @@ public:
 private:
     void _on_stun_send_packet(StunRequest* request, const char* buf, size_t size);
     bool _miss_response(int64_t now) const;   // 是否有 ping 等待超过 2*rtt 未回复
+    bool _too_many_ping_failed(size_t max_ping, int rtt, int64_t now);
+    bool _too_long_without_response(int min_time, int64_t now);
 
 private:
     EventLoop* _el;

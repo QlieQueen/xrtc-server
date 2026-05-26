@@ -315,6 +315,7 @@ void IceTransportChannel::_maybe_start_pinging() {
 //   4. 后续 commit: 检查超时、更新状态、切换连接
 // ============================================================================
 void IceTransportChannel::_on_check_and_ping() {
+    _update_connection_states();
     auto result = _ice_controller->select_connection_to_ping(
         _last_ping_sent_ms - PING_INTERVAL_DIFF);
 
@@ -332,6 +333,21 @@ void IceTransportChannel::_on_check_and_ping() {
         _cur_ping_interval = result.ping_interval;
         _el->stop_timer(_ping_watcher);
         _el->start_timer(_ping_watcher, _cur_ping_interval * 1000);
+    }
+}
+
+// ============================================================================
+// IceTransportChannel::_update_connection_states — 每周期轮询所有连接的探活状态
+//
+// 在 _on_check_and_ping() 开头调用，遍历全部连接调用 update_state()。
+// 降级逻辑在 IceConnection::update_state() 中: WRITABLE → UNRELIABLE → TIMEOUT。
+// 复制 connections 列表遍历，避免 update_state 间接触发列表变更。
+// ============================================================================
+void IceTransportChannel::_update_connection_states() {
+    std::vector<IceConnection*> connections = _ice_controller->connections();
+    int64_t now = rtc::TimeMillis();
+    for (auto conn : connections) {
+        conn->update_state(now);
     }
 }
 

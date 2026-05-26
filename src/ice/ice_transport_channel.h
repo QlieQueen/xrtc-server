@@ -48,6 +48,7 @@ private:
     void _ping_connection(IceConnection* conn);
     void _maybe_switch_selected_connection(IceConnection* conn); // 非空包装 → _switch_selected_connection
     void _switch_selected_connection(IceConnection* conn); // 实际切换逻辑, conn 可为 nullptr
+    void _update_connection_states();
 
     // libev 定时器回调函数，声明为 friend 以访问私有成员 _on_check_and_ping
     friend void ice_ping_cb(EventLoop* /*el*/, TimerWatcher* /*w*/, void* data);
