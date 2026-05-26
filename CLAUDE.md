@@ -213,7 +213,7 @@ Parsed via `yaml-cpp` into `GeneralConf` / `SignalingServerOptions` / `RtcServer
 ### Phase 9 当前进度
 
 - **参考项目**: `/home/ydqun/workspace/webrtc/xrtcserver`, commits `a0bdda8` → `9bb997d` (21 个)
-- **已完成**: 18/21 commits
+- **已完成**: 19/21 commits
   - ✅ commit 1: UDP 高性能发送 (用户提前实现)
   - ✅ commit 2: ICE 连接保活 (用户提前实现)
   - ✅ commit 3: StunErrorCodeAttribute + send_binding_error_response (`1.5.52`)
@@ -233,5 +233,6 @@ Parsed via `yaml-cpp` into `GeneralConf` / `SignalingServerOptions` / `RtcServer
   - ✅ commit 16: 开始切换 selected 连接 — _ready_to_send + _maybe_switch_selected_connection (`1.5.64`)
   - ✅ commit 17: STUN 错误响应处理 — on_connection_request_error_response + 内存泄漏修复 + mark_connection_pinged (`1.5.65`)
   - ✅ commit 18: 设置 Candidate pair 状态 — IceCandidatePairState 枚举 + 状态流转 + 销毁链路 (`1.5.66`)
-- **下一步**: commit 19 `63b5f45` — 处理 ICE ping 周期问题
+  - ✅ commit 19: 修复 ICE ping 周期 — _is_pingable 单连接间隔 + stable/_miss_response + 条件修正 (`1.5.67`)
+- **下一步**: commit 20 `9bc4471` — ICE 连接探活机制
 - **知识文档**: `note/phase9-background.md`, `note/phase9-connectivity-check-concepts.md`
