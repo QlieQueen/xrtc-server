@@ -33,6 +33,8 @@ public:
 public:
     sigslot::signal2<IceTransportChannel*, const std::vector<Candidate>&>
         signal_candidate_allocate_done;
+    sigslot::signal<IceTransportChannel*> signal_receiving_state_change;
+    sigslot::signal<IceTransportChannel*> signal_writable_state_change;
 
 private:
     void _on_unknown_address(UDPPort* port,
@@ -49,6 +51,9 @@ private:
     void _maybe_switch_selected_connection(IceConnection* conn); // 非空包装 → _switch_selected_connection
     void _switch_selected_connection(IceConnection* conn); // 实际切换逻辑, conn 可为 nullptr
     void _update_connection_states();
+    void _update_state();
+    void _set_receiving(bool receiving);
+    void _set_writable(bool writable);
 
     // libev 定时器回调函数，声明为 friend 以访问私有成员 _on_check_and_ping
     friend void ice_ping_cb(EventLoop* /*el*/, TimerWatcher* /*w*/, void* data);
@@ -67,6 +72,8 @@ private:
     int _cur_ping_interval = WEAK_PING_INTERVAL;
     int64_t _last_ping_sent_ms = 0;
     IceConnection* _selected_connection = nullptr;
+    bool _receiving = false;
+    bool _writable = false;
 };
 
 

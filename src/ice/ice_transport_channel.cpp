@@ -219,8 +219,61 @@ void IceTransportChannel::_on_connection_destroyed(IceConnection* conn) {
         _switch_selected_connection(nullptr);
         _sort_connections_and_update_state();
     } else {
-        // todo
+        _update_state();
     }
+}
+
+// ============================================================================
+// IceTransportChannel::_set_receiving — 更新"对端→我们"方向的 channel 聚合状态
+//
+// 仅当状态实际变化时才发射 signal_receiving_state_change，
+// 通知上层 (IceAgent) channel 的 receiving 状态变更。
+// ============================================================================
+void IceTransportChannel::_set_receiving(bool receiving) {
+    if (receiving == _receiving) {
+        return;
+    }
+
+    _receiving = receiving;
+    RTC_LOG(LS_INFO) << to_string() << ": Change receiving to " << _receiving;
+    signal_receiving_state_change(this);
+}
+
+// ============================================================================
+// IceTransportChannel::_set_writable — 更新"我们→对端"方向的 channel 聚合状态
+//
+// 仅当 selected connection 存在且 writable() 时 _writable 才为 true。
+// 状态变化时发射 signal_writable_state_change。
+// ============================================================================
+void IceTransportChannel::_set_writable(bool writable) {
+    if (writable == _writable) {
+        return;
+    }
+
+    _writable = writable;
+    RTC_LOG(LS_INFO) << to_string() << ": Change writable to " << _writable;
+    signal_writable_state_change(this);
+}
+
+// ============================================================================
+// IceTransportChannel::_update_state — 聚合所有连接的读写状态到 channel 级
+//
+// writable: selected_connection 存在且 writable() → 我们→对端可发送数据
+// receiving: 任意连接 receiving() → 对端→我们路径存活
+// ============================================================================
+void IceTransportChannel::_update_state() {
+    bool writable = _selected_connection && _selected_connection->writable();
+    _set_writable(writable);
+
+    bool receiving = false;
+    for (auto conn : _ice_controller->connections()) {
+        if (conn->receiving()) {
+            receiving = true;
+            break;
+        }
+    }
+
+    _set_receiving(receiving);
 }
 
 // ============================================================================
@@ -228,11 +281,12 @@ void IceTransportChannel::_on_connection_destroyed(IceConnection* conn) {
 //
 // 连接发生变化时（新增/状态变更）调用:
 //   1. _maybe_switch_selected_connection — 按质量排序并可能切换最优连接
-//   2. _maybe_start_pinging — 可能首次启动连通性检查
-//   3. 后续 commit: _update_state — 更新 channel 的聚合状态
+//   2. _update_state — 聚合连接状态, 更新 channel 级 writable / receiving
+//   3. _maybe_start_pinging — 可能首次启动连通性检查
 // ============================================================================
 void IceTransportChannel::_sort_connections_and_update_state() {
     _maybe_switch_selected_connection(_ice_controller->sort_and_switch_connection());
+    _update_state();
     _maybe_start_pinging();
 }
 
