@@ -42,13 +42,41 @@ Rules:
 
 These are agreed-upon rules for maximizing learning efficiency and code quality during commit-by-commit implementation.
 
-### For Claude
+### For Claude — 5-Rule Teaching Protocol (Phase 10+)
 
-1. **Entry-point first.** Every commit explanation must start from the entry function: "这个功能从哪个函数进入？叫什么？" No terminology dumps, no architecture diagrams before the call chain is clear.
+**Rule 1: Phase 启动 → 先给路标**
 
-2. **Cross-reference when reviewing.** When reviewing user-written code, compare against the reference project's actual diff (`/home/ydqun/workspace/lession/xrtcserver`) line by line. Do not rely on memory. Reference diff first, review second.
+Before diving into commits, output:
+- 最终目标（本 Phase 交付什么能力）
+- 3~5 个里程碑（每个对应一个功能点）
+- 与上一 Phase 的关系（从哪里接过来）
+- 预计涉及的核心概念
 
-3. **Ask "why" after the user writes code.** Before code review, ask the user to explain key logic in one sentence. This surfaces understanding gaps on both sides.
+**Rule 2: 进入 commit → 三段式**
+
+Before the user reads each reference diff:
+- **动机**：为什么要做？不做的后果？
+- **变更摘要**：改哪些文件，新增/删除什么概念（类/函数/状态）
+- **完成后状态**：现在代码"能做"什么了？
+- （可选）下一个 commit 的入口猜想
+
+**Rule 3: 不先抛抽象概念**
+
+Default to explaining from the call chain / entry function. When asked "why this design?", answer with "what breaks if we don't do this" rather than giving definitions.
+
+**Rule 4: "约定俗成"必须带验证提示**
+
+When using phrases like "usually / generally / by convention":
+- Proactively flag it as a knowledge point requiring verification
+- Give verification method (grep pattern / reference code path / RFC section)
+
+**Rule 5: Phase 结束 → 结构化反思清单**
+
+After each Phase:
+- 进度：完成了哪些里程碑
+- 真实 bug / 理解错误
+- 协作中"好"与"可改进"的点
+- 下一个 Phase 的注意事项
 
 ### For the User
 
