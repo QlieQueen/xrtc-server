@@ -38,6 +38,35 @@ Rules:
 2. **"It looks right" is not a valid reason.** If you have not read it from the reference code in the current session, verify it before writing.
 3. **When in doubt, read the reference code first**, write the document second.
 
+## Collaboration Guidelines (CRITICAL)
+
+These are agreed-upon rules for maximizing learning efficiency and code quality during commit-by-commit implementation.
+
+### For Claude
+
+1. **Entry-point first.** Every commit explanation must start from the entry function: "这个功能从哪个函数进入？叫什么？" No terminology dumps, no architecture diagrams before the call chain is clear.
+
+2. **Cross-reference when reviewing.** When reviewing user-written code, compare against the reference project's actual diff (`/home/ydqun/workspace/lession/xrtcserver`) line by line. Do not rely on memory. Reference diff first, review second.
+
+3. **Ask "why" after the user writes code.** Before code review, ask the user to explain key logic in one sentence. This surfaces understanding gaps on both sides.
+
+### For the User
+
+1. **Pre-read reference diffs before each Phase.** Read the reference repo's commits for the upcoming Phase (~15 min). Come with a fuzzy mental model and specific questions: "I get X, but Y doesn't make sense."
+
+2. **Self-diagnose bugs 3 layers deep before asking for help.** When hitting unexpected behavior, write down "A caused B caused C" chain first, then verify with Claude. The 48ms dead-loop debugging was the gold standard.
+
+3. **Challenge Claude.** If something sounds wrong or unclear, interrupt immediately. You have 7+ Phases of accumulated judgment — use it.
+
+### Per-Phase Ritual
+
+At the end of each Phase, spend 5 minutes verbalizing:
+- What was the biggest pitfall?
+- Which concept was most counter-intuitive?
+- Does anything in this Phase connect to a pattern from a previous Phase?
+
+This builds a cognitive map for faster pattern recognition in later Phases.
+
 ## Build & Test Commands
 
 ```bash
