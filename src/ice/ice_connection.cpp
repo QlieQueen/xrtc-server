@@ -94,6 +94,7 @@ void IceConnection::on_read_packet(const char* buf, size_t len, int64_t ts) {
     const Candidate& remote = _remote_candidate;
     if (!_port->get_stun_message(buf, len, remote.address, &stun_msg, &remote_ufrag)) {
         // 这个不是stun包，可能是其他的，比如dtls或者rtp包
+        signal_read_packet(this, buf, len, ts);
     } else if (!stun_msg) {
 
     } else { // stun_msg

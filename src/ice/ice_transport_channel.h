@@ -35,6 +35,7 @@ public:
         signal_candidate_allocate_done;
     sigslot::signal<IceTransportChannel*> signal_receiving_state_change;
     sigslot::signal<IceTransportChannel*> signal_writable_state_change;
+    sigslot::signal4<IceTransportChannel*, const char*, size_t, int64_t> signal_read_packet; 
 
 private:
     void _on_unknown_address(UDPPort* port,
@@ -47,6 +48,7 @@ private:
     void _on_check_and_ping();                      // 定时器回调: 周期性连通性检查
     void _on_connection_state_change(IceConnection* conn);
     void _on_connection_destroyed(IceConnection* conn);    // 连接销毁回调: 清理引用 + selected 重选
+    void _on_read_packet(IceConnection* conn, const char* buf, size_t len, int64_t ts);
     void _ping_connection(IceConnection* conn);
     void _maybe_switch_selected_connection(IceConnection* conn); // 非空包装 → _switch_selected_connection
     void _switch_selected_connection(IceConnection* conn); // 实际切换逻辑, conn 可为 nullptr

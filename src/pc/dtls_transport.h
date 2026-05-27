@@ -1,0 +1,35 @@
+#ifndef __DTLS_TRANSPORT_H_
+#define __DTLS_TRANSPORT_H_
+
+#include <string>
+#include <rtc_base/third_party/sigslot/sigslot.h>
+
+#include "ice/ice_transport_channel.h"
+
+namespace xrtc {
+
+// ============================================================================
+// DtlsTransport — DTLS 传输层, 在 ICE 通道之上进行 DTLS 握手与数据加密
+//
+// 生命周期: set_local_description 时创建, 绑定到对应的 IceTransportChannel。
+// 通过 signal_read_packet 订阅 ICE 层的非 STUN 数据, 后续 commit 加入
+// OpenSSL 握手逻辑。
+// ============================================================================
+class DtlsTransport : public sigslot::has_slots<> {
+public:
+    DtlsTransport(IceTransportChannel* channel);
+    ~DtlsTransport();
+
+    const std::string& transport_name() { return _channel->transport_name(); }
+    IceCandidateComponent component() { return _channel->component(); }
+
+private:
+    void _on_read_packet(IceTransportChannel* channel, const char* buf, size_t size, int64_t ts);
+
+private:
+    IceTransportChannel* _channel = nullptr;
+}; 
+
+} // namespace xrtc
+
+#endif // __DTLS_TRANSPORT_H_

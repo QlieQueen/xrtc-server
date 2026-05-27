@@ -1,5 +1,6 @@
 #include "pc/transport_controller.h"
 
+#include "pc/dtls_transport.h"
 
 namespace xrtc {
 
@@ -40,12 +41,32 @@ int TransportController::set_local_description(SessionDescription* desc) {
                 IceParameters(td->ice_ufrag, td->ice_pwd));
         }
 
+        DtlsTransport* dtls_transport = new DtlsTransport(
+            _ice_agent->get_channel(mid, IceCandidateComponent::RTP));
+        _add_dtls_transport(dtls_transport);
     }
     
     _ice_agent->gathering_candidate();
 
     return 0;
 }
+
+// ============================================================================
+// TransportController::_add_dtls_transport — 注册/替换 DTLS 传输对象
+//
+// 按 transport_name 索引, 已存在则先销毁旧对象再替换。
+// ============================================================================
+void TransportController::_add_dtls_transport(DtlsTransport* dtls_transport) {
+    std::string name = dtls_transport->transport_name();
+    auto iter = _dtls_transport_by_name.find(name);
+    if (iter != _dtls_transport_by_name.end()) {
+        delete iter->second;
+        iter->second = dtls_transport;
+    } else {
+        _dtls_transport_by_name[name] = dtls_transport;
+    }
+}
+
 
 int TransportController::set_remote_description(SessionDescription* remote_desc) {
     if (!remote_desc) {

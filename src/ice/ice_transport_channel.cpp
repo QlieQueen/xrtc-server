@@ -189,7 +189,21 @@ void IceTransportChannel::_add_connection(IceConnection* conn) {
         &IceTransportChannel::_on_connection_state_change);
     conn->signal_connection_destroy.connect(this,
         &IceTransportChannel::_on_connection_destroyed);
+    conn->signal_read_packet.connect(this,
+        &IceTransportChannel::_on_read_packet);
     _ice_controller->add_connection(conn);
+}
+
+// ============================================================================
+// IceTransportChannel::_on_read_packet — 转发非 STUN 数据包到 DtlsTransport
+//
+// 数据流: IceConnection::on_read_packet → signal_read_packet → 此处 → signal_read_packet
+//         → DtlsTransport::_on_read_packet
+// ============================================================================
+void IceTransportChannel::_on_read_packet(IceConnection* /*conn*/,
+        const char* buf, size_t len, int64_t ts)
+{
+    signal_read_packet(this, buf, len, ts);
 }
 
 // ============================================================================

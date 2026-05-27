@@ -100,6 +100,7 @@ public:
 public:
     sigslot::signal1<IceConnection*> signal_state_change;
     sigslot::signal1<IceConnection*> signal_connection_destroy;    // 连接销毁时通知 Channel 清理
+    sigslot::signal4<IceConnection*, const char*, size_t, int64_t> signal_read_packet;   // 非 STUN 数据包 (DTLS/RTP) → 向上传递
 
 private:
     void _on_stun_send_packet(StunRequest* request, const char* buf, size_t size);
