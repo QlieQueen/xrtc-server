@@ -203,7 +203,7 @@ Parsed via `yaml-cpp` into `GeneralConf` / `SignalingServerOptions` / `RtcServer
 | 6 | PeerConnection + TransportController | ✅ | — |
 | 7 | ANSWER + set_remote_sdp | ✅ | — |
 | 8 | STUN 消息编解码 | ✅ | `d3ca1b3` |
-| **9** | **ICE 连接状态机 + Controller** | **WIP** | `9c3f92a` |
+| **9** | **ICE 连接状态机 + Controller** | **✅ done** | `9bb997d` (21/21) |
 | 10 | DTLS 握手 + SRTP | pending | — |
 | 11 | PC/ICE/Agent 状态聚合 | pending | — |
 | 12 | PULL 流 + STOP 命令 | pending | — |
@@ -234,5 +234,7 @@ Parsed via `yaml-cpp` into `GeneralConf` / `SignalingServerOptions` / `RtcServer
   - ✅ commit 17: STUN 错误响应处理 — on_connection_request_error_response + 内存泄漏修复 + mark_connection_pinged (`1.5.65`)
   - ✅ commit 18: 设置 Candidate pair 状态 — IceCandidatePairState 枚举 + 状态流转 + 销毁链路 (`1.5.66`)
   - ✅ commit 19: 修复 ICE ping 周期 — _is_pingable 单连接间隔 + stable/_miss_response + 条件修正 (`1.5.67`)
-- **下一步**: commit 20 `9bc4471` — ICE 连接探活机制
+  - ✅ commit 20: ICE 连接探活机制 — update_state 两阶段退化 (`1.5.68`)
+  - ✅ commit 21: ICE 传输通道状态聚合 — _update_state + signal_writable/receiving_state_change (`1.5.69`)
+- **下一步**: Phase 10 `b01ce7f` — DTLS 握手 + SRTP
 - **知识文档**: `note/phase9-background.md`, `note/phase9-connectivity-check-concepts.md`
