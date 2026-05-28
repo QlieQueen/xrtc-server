@@ -118,6 +118,7 @@ target_link_libraries(xrtc-server-test
 
     libabsl_strings.a
     libabsl_throw_delegate.a
+    libabsl_bad_optional_access.a
     libabsl_base.a
 
     -lpthread

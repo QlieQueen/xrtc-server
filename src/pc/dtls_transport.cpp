@@ -46,6 +46,39 @@ bool is_dtls_client_hello_packet(const char* buf, size_t len) {
     return len > k_dtls_handshake_value_offset && (u[0] == 22 && u[13] == 1);
 }
 
+
+StreamInterfaceChannel::StreamInterfaceChannel(IceTransportChannel* channel) :
+    _channel(channel)
+{
+
+}
+
+
+rtc::StreamState StreamInterfaceChannel::GetState() const {
+    return rtc::StreamState::SS_CLOSED;
+}
+
+rtc::StreamResult StreamInterfaceChannel::Read(void* buffer,
+                size_t buffer_len,
+                size_t* read,
+                int* error)
+{
+    return rtc::StreamResult::SR_ERROR;
+}
+
+rtc::StreamResult StreamInterfaceChannel::Write(const void* data,
+                size_t data_len,
+                size_t* written,
+                int* error)
+{
+    return rtc::StreamResult::SR_ERROR;
+}
+
+void StreamInterfaceChannel::Close() {
+
+}
+
+
 // ============================================================================
 // DtlsTransport 构造 — 绑定 ICE channel, 订阅其 signal_read_packet
 //
@@ -102,17 +135,55 @@ void DtlsTransport::_on_read_packet(IceTransportChannel* /*channel*/,
 }
 
 // ============================================================================
-// DtlsTransport::_setup_dtls — 初始化 OpenSSL DTLS 上下文 (stub)
+// DtlsTransport::_setup_dtls — 初始化 OpenSSL DTLS 上下文
 //
-// 当前返回 false, 后续 commit 实现:
-//   - 创建 StreamInterfaceChannel (ICE 适配器)
-//   - 创建 SSLStreamAdapter
-//   - 设置证书、DTLS 模式、服务端角色、对端指纹
+// 1. 创建 StreamInterfaceChannel 适配器, 使 OpenSSL 能通过 ICE 通道收发数据
+// 2. 创建 SSLStreamAdapter (DTLS 模式 / DTLS 1.2 / 服务端角色)
+// 3. 设置本地证书和对端指纹
+// 4. 条件满足时启动 DTLS 握手 (_maybe_start_dtls)
 // ============================================================================
 bool DtlsTransport::_setup_dtls() {
-    return false;
+    std::unique_ptr<StreamInterfaceChannel> downward = 
+        std::make_unique<StreamInterfaceChannel>(_channel);
+
+    _downward = downward.get();
+
+    _dtls = rtc::SSLStreamAdapter::Create(std::move(downward));
+    if (!_dtls) {
+        RTC_LOG(LS_WARNING) << to_string() << ": Failed to create SSLStreamAdapter";
+        return false;
+    }
+
+    _dtls->SetIdentity(_local_certificate->identity()->Clone());
+    _dtls->SetMode(rtc::SSL_MODE_DTLS);
+    _dtls->SetMaxProtocolVersion(rtc::SSL_PROTOCOL_DTLS_12);
+    _dtls->SetServerRole(rtc::SSL_SERVER);
+
+    if (_remote_fingerprint_value.size() && !_dtls->SetPeerCertificateDigest(
+                _remote_fingerprint_alg,
+                _remote_fingerprint_value.data(),
+                _remote_fingerprint_value.size()))
+    {
+        RTC_LOG(LS_WARNING) << to_string() << ": Failed to set remote fingerprint";
+        return false;
+    }
+
+    RTC_LOG(LS_INFO) << to_string() << ": Setup DTLS complete";
+
+    _maybe_start_dtls();
+
+    return true;
 }
 
+// ============================================================================
+// DtlsTransport::_maybe_start_dtls — 条件启动 DTLS 握手 (stub)
+//
+// 启动条件: 本地证书已设置 + 对端指纹已设置 + ICE 通道 writable。
+// 当前仅返回 false, 后续 commit 实现完整条件检查与 StartSSL。
+// ============================================================================
+bool DtlsTransport::_maybe_start_dtls() {
+    return false;
+}
 
 std::string DtlsTransport::to_string() {
     std::stringstream ss;
