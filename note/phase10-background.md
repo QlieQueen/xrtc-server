@@ -87,7 +87,8 @@ DtlsTransport                          ← DTLS 状态机
   │                                    │
   │──── ClientHello ────────────────→   │ ICE 还没 ready → _catched_client_hello 缓存
   │                                    │
-  │←─── SDP answer (fingerprint) ────  │ set_remote_fingerprint() → 指纹存入
+  │   [客户端发送 SDP answer]           │
+  │──── SDP answer (fingerprint) ──→   │ set_remote_fingerprint() → 指纹存入
   │                                    │ _setup_dtls() → 创建 SSLStreamAdapter
   │                                    │ _maybe_start_dtls() → 检查 ICE writable
   │                                    │

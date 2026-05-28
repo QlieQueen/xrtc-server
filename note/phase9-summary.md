@@ -92,7 +92,7 @@ _is_pingable 缺少 int64_t now 参数
 2. 尚无 selected → 直接选 top（冷启动）
 3. top RTT 比当前 selected 小 ≥ 10ms → 切换（防抖阈值 `k_min_improvement`）
 
-### 4. writable 与 receiving 不对称
+### 4. channel 的 writable 与 receiving 不对称
 
 | | writable | receiving |
 |------|----------|-----------|
