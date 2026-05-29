@@ -62,6 +62,13 @@ public:
     const std::string& transport_name() { return _channel->transport_name(); }
     IceCandidateComponent component() { return _channel->component(); }
 
+    // ========================================================================
+    // set_local_certificate — 设置 DTLS 本地证书
+    //
+    // _dtls_active 保证证书设置后不可更改: 相同证书返回 true, 不同证书返回 false。
+    // ========================================================================
+    bool set_local_certificate(rtc::RTCCertificate* certificate);
+
     std::string to_string();
 
 private:
@@ -80,6 +87,8 @@ private:
     StreamInterfaceChannel* _downward = nullptr;
     rtc::Buffer _remote_fingerprint_value;
     std::string _remote_fingerprint_alg;
+    // _dtls_active 标记证书已设置, 防止 DTLS 启动后更换证书
+    bool _dtls_active = false;
 }; 
 
 } // namespace xrtc

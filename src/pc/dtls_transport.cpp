@@ -185,6 +185,33 @@ bool DtlsTransport::_maybe_start_dtls() {
     return false;
 }
 
+// ============================================================================
+// DtlsTransport::set_local_certificate — 设置 DTLS 本地证书
+//
+// _dtls_active 保证一次性设置:
+//   - 未激活: 赋值并标记 active
+//   - 已激活 + 相同证书: 忽略 (幂等)
+//   - 已激活 + 不同证书: 拒绝 (不可更换)
+// ============================================================================
+bool DtlsTransport::set_local_certificate(rtc::RTCCertificate* certificate) {
+    if (_dtls_active) {
+        if (certificate == _local_certificate) {
+            RTC_LOG(LS_INFO) << to_string() << ": Ingoring identical DTLS cert";
+            return true;
+        } else {
+            RTC_LOG(LS_WARNING) << to_string() << ": Cannot change DTLS cert in this state";
+            return false;
+        }
+    }
+
+    if (certificate) {
+        _local_certificate = certificate;
+        _dtls_active = true;
+    }
+
+    return true;
+}
+
 std::string DtlsTransport::to_string() {
     std::stringstream ss;
     absl::string_view RECEIVING[2] = {"-", "R"};

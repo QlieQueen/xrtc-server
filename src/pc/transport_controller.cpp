@@ -43,6 +43,7 @@ int TransportController::set_local_description(SessionDescription* desc) {
 
         DtlsTransport* dtls_transport = new DtlsTransport(
             _ice_agent->get_channel(mid, IceCandidateComponent::RTP));
+        dtls_transport->set_local_certificate(_local_certificate);
         _add_dtls_transport(dtls_transport);
     }
     
