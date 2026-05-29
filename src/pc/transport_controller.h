@@ -35,6 +35,7 @@ private:
             IceCandidateComponent component,
             const std::vector<Candidate>& candidates);
     void _add_dtls_transport(DtlsTransport* dtls_transport);
+    DtlsTransport* _get_dtls_transport(const std::string& transport_name);
 
 private:
     EventLoop* _el;

@@ -125,11 +125,11 @@ void DtlsTransport::_on_read_packet(IceTransportChannel* /*channel*/,
                 }
 
             } else {
-                RTC_LOG(LS_WARNING) << to_string() << " Not a DTLS ClientHello packet.";
+                RTC_LOG(LS_WARNING) << to_string() << " Not a DTLS ClientHello packet, "
+                    << "dropping";
             }
 
-        break;
-
+            break;
     }
 
 }
@@ -185,6 +185,28 @@ bool DtlsTransport::_maybe_start_dtls() {
     return false;
 }
 
+void DtlsTransport::_set_dtls_state(DtlsTransportState state) {
+    if (_dtls_state == state) {
+        return;
+    }
+
+    RTC_LOG(LS_INFO) << to_string() << ": Change dtls state from " << _dtls_state
+        << " to " << state;
+    _dtls_state = state;
+    signal_dtls_state(this, state);
+}
+
+void DtlsTransport::_set_writable_state(bool writable) {
+    if (_writable == writable) {
+        return;
+    }
+
+    RTC_LOG(LS_INFO) << to_string() << ": Change dtls writable state from " << _writable
+        << " to " << writable;
+    _writable = writable;
+    signal_writable_state(this);
+}
+
 // ============================================================================
 // DtlsTransport::set_local_certificate — 设置 DTLS 本地证书
 //
@@ -207,6 +229,76 @@ bool DtlsTransport::set_local_certificate(rtc::RTCCertificate* certificate) {
     if (certificate) {
         _local_certificate = certificate;
         _dtls_active = true;
+    }
+
+    return true;
+}
+
+
+// ========================================================================
+// DtlsTransport::set_remote_fingerprint — 设置对端 DTLS 证书指纹
+//
+// 两种时序路径:
+//
+// 路径 A — answer SDP 先到 (正常):
+//   指纹存入 _remote_fingerprint_* → _dtls 还不存在 → 跳过两个 if
+//   → _setup_dtls() 内部 SetPeerCertificateDigest 一把配好
+//
+// 路径 B — ClientHello 先到 (UDP 不等 ICE):
+//   ClientHello 触发 _setup_dtls(), 此时指纹空, SetPeerCertificateDigest 被跳过
+//   → answer 后到, _dtls 已存在 && !fingerprint_change → 步骤 6 补调
+//   SetPeerCertificateDigest 给已创建的 _dtls
+//
+// 步骤 7 (指纹变更): 收到不同的 answer SDP, 销毁旧 _dtls 全部重建。
+// ========================================================================
+bool DtlsTransport::set_remote_fingerprint(const std::string& digest_alg,
+        const unsigned char* digest_data, size_t digest_len)
+{
+    rtc::Buffer remote_fingerprint_value(digest_data, digest_len);
+
+    if (_dtls_active && _remote_fingerprint_value == remote_fingerprint_value) {
+        RTC_LOG(LS_INFO) << to_string() << ": Ignoring identical remote fingerprint";
+        return true;
+    }
+
+    if (digest_alg.empty()) {
+        RTC_LOG(LS_WARNING) << to_string() << ": Other sides not support DTLS";
+        _dtls_active = false;
+        return false;
+    }
+
+    if (!_dtls_active) {
+        RTC_LOG(LS_WARNING) << to_string() << ": Cannot set remote fingerprint before set local certificate";
+        return false;
+    }
+
+    bool is_fingerprint_change = _remote_fingerprint_alg.size() > 0u;
+    _remote_fingerprint_value = std::move(remote_fingerprint_value);
+    _remote_fingerprint_alg = digest_alg;
+
+    // 路径 B: ClientHello 先到已创建 _dtls, 但 _setup_dtls 里缺指纹跳过了
+    // SetPeerCertificateDigest. 此处补设指纹到已有 _dtls, 无需重建.
+    if (_dtls && !is_fingerprint_change) {
+        rtc::SSLPeerCertificateDigestError err;
+        if (!_dtls->SetPeerCertificateDigest(digest_alg, digest_data, digest_len, &err)) {
+            RTC_LOG(LS_WARNING) << to_string() << ": Failed to set peer certificate digest";
+            _set_dtls_state(DtlsTransportState::k_failed);
+            return err == rtc::SSLPeerCertificateDigestError::VERIFICATION_FAILED;
+        }
+        return true;
+    }
+
+    // 步骤 7: 指纹变更 (不同 answer SDP) — 销毁旧 _dtls, 重建 DTLS 上下文
+    if (_dtls && is_fingerprint_change) {
+        _dtls.reset(nullptr);
+        _set_dtls_state(DtlsTransportState::k_new);
+        _set_writable_state(false);
+    }
+
+    if (!_setup_dtls()) {
+        RTC_LOG(LS_WARNING) << to_string() << ": Failed to setup DTLS";
+        _set_dtls_state(DtlsTransportState::k_failed);
+        return false;
     }
 
     return true;
