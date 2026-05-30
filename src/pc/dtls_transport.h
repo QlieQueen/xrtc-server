@@ -5,6 +5,7 @@
 #include <string>
 #include <rtc_base/stream.h>
 #include <rtc_base/buffer.h>
+#include <rtc_base/buffer_queue.h>
 #include <rtc_base/rtc_certificate.h>
 #include <rtc_base/ssl_stream_adapter.h>
 #include <rtc_base/third_party/sigslot/sigslot.h>
@@ -47,15 +48,11 @@ public:
     void Close() override;
 private:
     IceTransportChannel* _channel = nullptr;
+    rtc::BufferQueue _packets;
+    rtc::StreamState _state = rtc::SS_OPEN;
 };
 
-// ============================================================================
-// DtlsTransport — DTLS 传输层, 在 ICE 通道之上进行 DTLS 握手与数据加密
-//
-// 生命周期: set_local_description 时创建, 绑定到对应的 IceTransportChannel。
-// 通过 signal_read_packet 订阅 ICE 层的非 STUN 数据, 后续 commit 加入
-// OpenSSL 握手逻辑。
-// ============================================================================
+// DtlsTransport — ICE 通道之上的 DTLS 握手与数据加密
 class DtlsTransport : public sigslot::has_slots<> {
 public:
     DtlsTransport(IceTransportChannel* channel);
@@ -86,6 +83,7 @@ private:
     void _set_dtls_state(DtlsTransportState state);
     void _set_writable_state(bool writable);
     bool _handle_dtls_packet(const char* data, size_t size);
+    void _on_writable_state(IceTransportChannel* channel);
 
 private:
     IceTransportChannel* _channel = nullptr;

@@ -14,6 +14,9 @@ namespace xrtc {
 const size_t k_dtls_record_header_len = 13;
 const size_t k_dtls_handshake_value_offset = 17;
 
+const size_t k_max_dtls_packet_len = 2048;
+const size_t k_max_pending_packets = 2;
+
 // ============================================================================
 // is_dtls_packet — 判断是否为合法 DTLS Record
 //
@@ -48,24 +51,31 @@ bool is_dtls_client_hello_packet(const char* buf, size_t len) {
 
 
 StreamInterfaceChannel::StreamInterfaceChannel(IceTransportChannel* channel) :
-    _channel(channel)
+    _channel(channel),
+    _packets(k_max_pending_packets, k_max_dtls_packet_len)
 {
 
 }
 
 
-// ============================================================================
-// StreamInterfaceChannel::on_received_packet — 接收 DTLS 数据包的入口 (stub)
-//
-// _downward->on_received_packet 作为数据注入点, 供 _handle_dtls_packet 调用。
-// 当前仅声明未实现, 后续 commit 完成将数据写入 OpenSSL 的逻辑。
-// ============================================================================
+// StreamInterfaceChannel::on_received_packet — 数据注入点
+// 写入 BufferQueue 后 SignalEvent(SE_READ) 唤醒 OpenSSL 来 Read()
 bool StreamInterfaceChannel::on_received_packet(const char* data, size_t size) {
+    if (_packets.size() > 0) {
+        RTC_LOG(LS_INFO) << ": Packet already in buffer queue";
+    }
+    
+    if (!_packets.WriteBack(data, size, nullptr)) {
+        RTC_LOG(LS_WARNING) << ": Failed to write packet to queue";
+    }
 
+    SignalEvent(this, rtc::SE_READ, 0);
+
+    return true;
 }
 
 rtc::StreamState StreamInterfaceChannel::GetState() const {
-    return rtc::StreamState::SS_CLOSED;
+    return _state;
 }
 
 rtc::StreamResult StreamInterfaceChannel::Read(void* buffer,
@@ -73,7 +83,19 @@ rtc::StreamResult StreamInterfaceChannel::Read(void* buffer,
                 size_t* read,
                 int* error)
 {
-    return rtc::StreamResult::SR_ERROR;
+    if (_state == rtc::SS_CLOSED) {
+        return rtc::SR_EOS;
+    }
+
+    if (_state == rtc::SS_OPENING) {
+        return rtc::SR_BLOCK;
+    }
+
+    if (!_packets.ReadFront(buffer, buffer_len, read)) {
+        return rtc::SR_BLOCK;
+    }
+
+    return rtc::SR_SUCCESS;
 }
 
 rtc::StreamResult StreamInterfaceChannel::Write(const void* data,
@@ -89,19 +111,37 @@ void StreamInterfaceChannel::Close() {
 }
 
 
-// ============================================================================
-// DtlsTransport 构造 — 绑定 ICE channel, 订阅其 signal_read_packet
-//
-// ICE 层收到非 STUN 包时发射信号, 经 IceTransportChannel 转发到此。
-// 当前仅打印包长度, 后续 commit 加入 DTLS 握手处理。
-// ============================================================================
+// DtlsTransport — 绑定 ICE channel, 订阅 signal_read_packet + signal_writable_state_change
 DtlsTransport::DtlsTransport(IceTransportChannel* channel) :
     _channel(channel)
 {
     _channel->signal_read_packet.connect(this, &DtlsTransport::_on_read_packet);
+    _channel->signal_writable_state_change.connect(this, &DtlsTransport::_on_writable_state);
 }
 
 DtlsTransport::~DtlsTransport() {
+
+}
+
+void DtlsTransport::_on_writable_state(IceTransportChannel* channel) {
+    RTC_LOG(LS_INFO) << to_string() << ": IceTransportChannel writable changed to "
+        << channel->writable();
+
+    if (!_dtls_active) {
+        _set_writable_state(channel->writable());
+        return;
+    }
+
+    switch (_dtls_state) {
+        case DtlsTransportState::k_new:
+            _maybe_start_dtls();
+            break;
+        case DtlsTransportState::k_connected:
+            _set_writable_state(channel->writable());
+            break;
+        default:
+            break;
+    }
 
 }
 

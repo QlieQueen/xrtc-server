@@ -67,6 +67,85 @@ OpenSSL (SSL_Read / SSL_Write)
 
 **为什么需要这个适配器？** OpenSSL 不认识 `IceConnection` 也不认识 `IceTransportChannel`。它只知道 `StreamInterface::Read(buf, len)`。适配器把 ICE 层的收包变成 BufferQueue，把 OpenSSL 的 Write 变成 ICE 的发送。
 
+### 3.1 `_dtls` 与 `_downward` 的关系（易混淆点）
+
+**不是同一个东西：**
+
+- **`_dtls`** (`SSLStreamAdapter`) — OpenSSL 引擎，负责 DTLS 握手协议和加密/解密
+- **`_downward`** (`StreamInterfaceChannel*`) — ICE 适配器裸指针，负责缓冲队列和数据收发
+
+`_dtls` **拥有** `_downward` 的所有权：
+
+```cpp
+std::unique_ptr<StreamInterfaceChannel> downward = std::make_unique<StreamInterfaceChannel>(_channel);
+_downward = downward.get();  // 保存裸指针
+_dtls = rtc::SSLStreamAdapter::Create(std::move(downward));  // 所有权转移给 _dtls
+```
+
+保留 `_downward` 裸指针的原因是：`_handle_dtls_packet` 需要调用 `_downward->on_received_packet()` 往 BufferQueue 灌数据，这个方法在 `StreamInterfaceChannel` 上，不在 `rtc::StreamInterface` 接口里，通过 `_dtls` 调不到。
+
+### 3.2 OpenSSL 如何调用到 Read()：BIO 回调链
+
+`_dtls` 构造时把 `_downward` 包进 OpenSSL 的 BIO（Basic I/O）层：
+
+```cpp
+// openssl_stream_adapter.cc 构造函数
+stream_->SignalEvent.connect(this, &OpenSSLStreamAdapter::OnEvent);
+
+// 初始化时创建 BIO
+static BIO* BIO_new_stream(StreamInterface* stream) {
+    BIO* ret = BIO_new(BIO_stream_method());
+    BIO_set_data(ret, stream);  // 把 StreamInterfaceChannel* 存进 BIO
+    return ret;
+}
+```
+
+OpenSSL 读数据时的完整调用链：
+
+```
+OpenSSL SSL_read()
+  → BIO_read()
+    → stream_read(BIO* b, ...)           // openssl_stream_adapter.cc:207
+      → stream = BIO_get_data(b)         // 取出之前存的 StreamInterfaceChannel*  // :211
+        → stream->Read(out, ...)         // 调用你的 Read()                      // :215
+          → _packets.ReadFront()         // 从 BufferQueue 取数据
+```
+
+**数据方向总结：**
+
+```
+灌数据（生产）:
+  _handle_dtls_packet → _downward->on_received_packet() → BufferQueue → SignalEvent(SE_READ)
+
+取数据（消费）:
+  OpenSSL → BIO → stream_read() → _downward->Read() → BufferQueue
+```
+
+`on_received_packet` 是注入方法（生产），`Read` 是消费方法。`SignalEvent(SE_READ)` 是通知机制——OpenSSL 不知道 BufferQueue 里有数据，必须由 `on_received_packet` 发射信号唤醒 OpenSSL 来消费。`SignalEvent` 不是同步调用 `Read()`，而是异步唤醒 OpenSSL 的握手循环，OpenSSL 被唤醒后去调 `SSL_read` → `Read()`。如果 BufferQueue 为空，`Read()` 返回 `SR_BLOCK` → `SSL_ERROR_WANT_READ`，OpenSSL 退回去等下一个信号。
+
+### 3.3 为什么需要订阅 ICE 的 writable 状态变化
+
+DTLS 启动条件之一是 `_channel->writable()`。ICE 连通是异步的——以下场景会丢启动时机：
+
+```
+_setup_dtls() → _maybe_start_dtls() → ICE 还没 writable → 跳过
+      ↓
+  过了几秒...
+      ↓
+  ICE 通了 → 没人再调 _maybe_start_dtls() → DTLS 永远不启动
+```
+
+`_on_writable_state` 补这个缺口。ICE 变 writable 时自动收到通知：
+
+| `_dtls_state` | `_dtls_active` | 行为 |
+|--------------|----------------|------|
+| — | false | 直接 mirror ICE writable（DTLS 还没准备好） |
+| `k_new` | true | `_maybe_start_dtls()`（DTLS 已准备好，终于等到 ICE 通） |
+| `k_connected` | true | mirror ICE writable（DTLS 已在跑） |
+| 其他 | — | 不处理 |
+
+注意：此时 `_maybe_start_dtls` 内部有 guard `if (_dtls && _channel->writable())`，所以即使 `k_new` 时 `_dtls` 还不存在也是安全的。
+
 ## 4. DTLS 握手完整流程
 
 ### 4.1 组件关系
