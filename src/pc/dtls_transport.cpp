@@ -54,6 +54,16 @@ StreamInterfaceChannel::StreamInterfaceChannel(IceTransportChannel* channel) :
 }
 
 
+// ============================================================================
+// StreamInterfaceChannel::on_received_packet — 接收 DTLS 数据包的入口 (stub)
+//
+// _downward->on_received_packet 作为数据注入点, 供 _handle_dtls_packet 调用。
+// 当前仅声明未实现, 后续 commit 完成将数据写入 OpenSSL 的逻辑。
+// ============================================================================
+bool StreamInterfaceChannel::on_received_packet(const char* data, size_t size) {
+
+}
+
 rtc::StreamState StreamInterfaceChannel::GetState() const {
     return rtc::StreamState::SS_CLOSED;
 }
@@ -176,13 +186,35 @@ bool DtlsTransport::_setup_dtls() {
 }
 
 // ============================================================================
-// DtlsTransport::_maybe_start_dtls — 条件启动 DTLS 握手 (stub)
+// DtlsTransport::_maybe_start_dtls — 条件启动 DTLS 握手
 //
-// 启动条件: 本地证书已设置 + 对端指纹已设置 + ICE 通道 writable。
-// 当前仅返回 false, 后续 commit 实现完整条件检查与 StartSSL。
+// 启动条件: _dtls 已创建 + ICE 通道 writable。
+// 1. StartSSL 失败 → k_failed
+// 2. StartSSL 成功 → k_connecting, replay 缓存的 ClientHello (如有)
+//    ClientHello replay 失败 → k_failed
 // ============================================================================
-bool DtlsTransport::_maybe_start_dtls() {
-    return false;
+void DtlsTransport::_maybe_start_dtls() {
+    if (_dtls && _channel->writable()) {
+        if (_dtls->StartSSL()) {
+            RTC_LOG(LS_WARNING) << to_string() << ": Failed to StartSSL.";
+            _set_dtls_state(DtlsTransportState::k_failed);
+            return;
+        }
+
+        RTC_LOG(LS_INFO) << to_string() << ": Started DTLS.";
+        _set_dtls_state(DtlsTransportState::k_connecting);
+
+
+        if (_catched_client_hello.size()) {
+            if (!_handle_dtls_packet(_catched_client_hello.data<char>(),
+                        _catched_client_hello.size()))
+            {
+                RTC_LOG(LS_WARNING) << to_string() << ": Handling dtls packet failed";
+                _set_dtls_state(DtlsTransportState::k_failed);
+            }
+            _catched_client_hello.Clear();
+        }
+    }
 }
 
 void DtlsTransport::_set_dtls_state(DtlsTransportState state) {
@@ -295,6 +327,7 @@ bool DtlsTransport::set_remote_fingerprint(const std::string& digest_alg,
         _set_writable_state(false);
     }
 
+    // 走到这里是dtls还没setup
     if (!_setup_dtls()) {
         RTC_LOG(LS_WARNING) << to_string() << ": Failed to setup DTLS";
         _set_dtls_state(DtlsTransportState::k_failed);
@@ -302,6 +335,35 @@ bool DtlsTransport::set_remote_fingerprint(const std::string& digest_alg,
     }
 
     return true;
+}
+
+
+// ============================================================================
+// DtlsTransport::_handle_dtls_packet — 验证 DTLS Record 完整性后注入 OpenSSL
+//
+// 1. 遍历 buffer 中所有 DTLS Record, 逐条校验 Record Header 中的 length 字段
+//    (大端序: tmp_data[11]<<8 | tmp_data[12]), 确保不会读取越界
+// 2. 全部 Record 校验通过后, 经 StreamInterfaceChannel 注入 SSLStreamAdapter
+// ============================================================================
+bool DtlsTransport::_handle_dtls_packet(const char* data, size_t size) {
+    const uint8_t* tmp_data = reinterpret_cast<const uint8_t*>(data);
+    size_t tmp_size = size;
+
+    while (tmp_size > 0) {
+        if (tmp_size < k_dtls_record_header_len) {
+            return false;
+        }
+
+        size_t record_len = (tmp_data[11] << 8) | tmp_data[12];
+        if (record_len + k_dtls_record_header_len > tmp_size) {
+            return false;
+        }
+
+        tmp_data += k_dtls_record_header_len + record_len;
+        tmp_size -= k_dtls_record_header_len + record_len;
+    }
+
+    return _downward->on_received_packet(data, size);
 }
 
 std::string DtlsTransport::to_string() {

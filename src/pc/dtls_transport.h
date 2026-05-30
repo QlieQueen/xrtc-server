@@ -32,6 +32,8 @@ public:
     StreamInterfaceChannel(IceTransportChannel* channel);
     ~StreamInterfaceChannel() override = default;
 
+    bool on_received_packet(const char* data, size_t size);
+
     rtc::StreamState GetState() const override;
 
     rtc::StreamResult Read(void* buffer,
@@ -80,9 +82,10 @@ public:
 private:
     void _on_read_packet(IceTransportChannel* channel, const char* buf, size_t size, int64_t ts);
     bool _setup_dtls();
-    bool _maybe_start_dtls();
+    void _maybe_start_dtls();
     void _set_dtls_state(DtlsTransportState state);
     void _set_writable_state(bool writable);
+    bool _handle_dtls_packet(const char* data, size_t size);
 
 private:
     IceTransportChannel* _channel = nullptr;

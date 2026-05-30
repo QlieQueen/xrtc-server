@@ -25,6 +25,7 @@ public:
     void set_ice_params(const IceParameters& ice_params);
     void set_remote_ice_params(const IceParameters& remote_ice_params);
     IceParameters remote_ice_params() const { return _remote_ice_params; }
+    bool writable() { return _writable; }
     const std::string& transport_name() { return _transport_name; }
     IceCandidateComponent component() { return _component; }
     void gathering_candidate();
