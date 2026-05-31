@@ -133,6 +133,7 @@ DtlsTransport::DtlsTransport(IceTransportChannel* channel) :
 {
     _channel->signal_read_packet.connect(this, &DtlsTransport::_on_read_packet);
     _channel->signal_writable_state_change.connect(this, &DtlsTransport::_on_writable_state);
+    _channel->signal_receiving_state_change.connect(this, &DtlsTransport::_on_receiving_state);
 
     webrtc::CryptoOptions crypto_options;
     _srtp_ciphers = crypto_options.GetSupportedDtlsSrtpCryptoSuites();
@@ -162,6 +163,10 @@ void DtlsTransport::_on_writable_state(IceTransportChannel* channel) {
             break;
     }
 
+}
+
+void DtlsTransport::_on_receiving_state(IceTransportChannel* channel) {
+    _set_receiving(channel->receiving());
 }
 
 // DtlsTransport::_on_read_packet — ICE 层转发的非 STUN 数据
@@ -385,6 +390,16 @@ void DtlsTransport::_set_writable_state(bool writable) {
         << " to " << writable;
     _writable = writable;
     signal_writable_state(this);
+}
+
+
+void DtlsTransport::_set_receiving(bool receiving) {
+    if (_receiving == receiving) {
+        return;
+    }
+    RTC_LOG(LS_INFO) << to_string() << ": Change dtls receiving to " << receiving;
+    _receiving = receiving;
+    signal_receiving_state(this);
 }
 
 // ============================================================================

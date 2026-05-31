@@ -76,6 +76,7 @@ public:
 public:
     sigslot::signal2<DtlsTransport*, DtlsTransportState> signal_dtls_state;
     sigslot::signal1<DtlsTransport*> signal_writable_state;
+    sigslot::signal1<DtlsTransport*> signal_receiving_state;
     sigslot::signal4<DtlsTransport*, const char*, size_t, int64_t> signal_read_packet;
     sigslot::signal1<DtlsTransport*> signal_closed;
 
@@ -85,8 +86,10 @@ private:
     void _maybe_start_dtls();
     void _set_dtls_state(DtlsTransportState state);
     void _set_writable_state(bool writable);
+    void _set_receiving(bool receiving);
     bool _handle_dtls_packet(const char* data, size_t size);
     void _on_writable_state(IceTransportChannel* channel);
+    void _on_receiving_state(IceTransportChannel* channel);
     void _on_dtls_event(rtc::StreamInterface* dtls, int sig, int error);
     void _on_dtls_handshake_error(rtc::SSLHandshakeError error);
 
