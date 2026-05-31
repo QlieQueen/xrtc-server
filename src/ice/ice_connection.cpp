@@ -479,6 +479,14 @@ void IceConnection::received_ping_response(int rtt) {
     set_state(IceCandidatePairState::SUCCEEDED);
 }
 
+int IceConnection::send_packet(const char* data, size_t len) {
+    if (!_port) {
+        return -1;
+    }
+
+    return _port->send_to(data, len, _remote_candidate.address);
+}
+
 std::string IceConnection::to_string() {
     std::stringstream ss;
     ss << "Conn[" << this << ":" << _port->transport_name()

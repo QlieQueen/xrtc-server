@@ -98,16 +98,23 @@ rtc::StreamResult StreamInterfaceChannel::Read(void* buffer,
     return rtc::SR_SUCCESS;
 }
 
+// StreamInterfaceChannel::Write — OpenSSL 加密后的数据通过 ICE 发出
 rtc::StreamResult StreamInterfaceChannel::Write(const void* data,
                 size_t data_len,
                 size_t* written,
                 int* error)
 {
-    return rtc::StreamResult::SR_ERROR;
+    _channel->send_packet((const char*)data, data_len);
+    if (written) {
+        * written = data_len;
+    }
+
+    return rtc::SR_SUCCESS;
 }
 
 void StreamInterfaceChannel::Close() {
-
+    _state = rtc::SS_CLOSED;
+    _packets.Clear();
 }
 
 
@@ -145,15 +152,10 @@ void DtlsTransport::_on_writable_state(IceTransportChannel* channel) {
 
 }
 
-// ============================================================================
-// DtlsTransport::_on_read_packet — 处理 ICE 层转发的非 STUN 数据
+// DtlsTransport::_on_read_packet — ICE 层转发的非 STUN 数据
 //
-// k_new 状态: DTLS 尚未启动, 收到 ClientHello 则缓存到 _catched_client_hello。
-// 缓存原因: 客户端拿到服务端地址后立即发 ClientHello, 不等待 ICE 连通。
-// 此时服务端的 DTLS 启动条件 (证书/指纹/ICE writable) 可能还未满足,
-// 若直接丢弃, 客户端 DTLS 重传超时是指数退避的, 握手迟迟无法开始。
-// 缓存后在 _maybe_start_dtls 中重放给 OpenSSL, 握手立即启动。
-// ============================================================================
+// k_new: 缓存 ClientHello, 等 DTLS 启动后重放
+// k_connecting / k_connected: DTLS 包注入 OpenSSL, RTP/RTCP 暂未处理
 void DtlsTransport::_on_read_packet(IceTransportChannel* /*channel*/,
         const char* buf, size_t len, int64_t /*ts*/)
 {
@@ -179,6 +181,22 @@ void DtlsTransport::_on_read_packet(IceTransportChannel* /*channel*/,
                     << "dropping";
             }
 
+            break;
+
+        case DtlsTransportState::k_connecting:
+        case DtlsTransportState::k_connected:
+            if (is_dtls_packet(buf, len)) {  // Dtls包
+                if (!_handle_dtls_packet(buf, len)) {
+                    RTC_LOG(LS_WARNING) << to_string() << ": handle Dtls packet failed";
+                    return;
+                }
+            } else {   // RTP/RTCP包
+                // todo
+            }
+
+            break;
+
+        default:
             break;
     }
 

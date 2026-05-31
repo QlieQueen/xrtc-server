@@ -47,6 +47,7 @@ public:
     void set_selected_connection(IceConnection* conn) { _selected_connection = conn; }
     void mark_connection_pinged(IceConnection* ping);
     void on_connection_destroyed(IceConnection* conn);   // 从所有集合中移除已销毁的连接
+    bool ready_to_send(IceConnection* conn);
 
 private:
     // channel weak = 没有 selected connection 或 selected connection 不通畅
@@ -60,7 +61,6 @@ private:
     int _get_connection_ping_interval(const IceConnection* conn,   int64_t now);
     bool _more_pingable(IceConnection* conn1, IceConnection* conn2);
     int _compare_connections(IceConnection* a, IceConnection* b);
-    bool _ready_to_send(IceConnection* conn);
 
 private:
     IceTransportChannel* _ice_channel;

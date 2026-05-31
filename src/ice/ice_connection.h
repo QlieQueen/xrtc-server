@@ -85,6 +85,7 @@ public:
     void destroy();
     void fail_and_destroy();
     void update_state(int64_t now);
+    int send_packet(const char* data, size_t len);
     
     bool weak() { return !(writable() && receiving()); }   // 双向都通才不是 weak
     bool active() { return _write_state != STATE_WRITE_TIMEOUT; }  // 没超时就是活跃的

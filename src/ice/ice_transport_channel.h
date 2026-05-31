@@ -29,6 +29,8 @@ public:
     const std::string& transport_name() { return _transport_name; }
     IceCandidateComponent component() { return _component; }
     void gathering_candidate();
+    int send_packet(const char* data, size_t len);
+
     std::string to_string();
 
 public:
