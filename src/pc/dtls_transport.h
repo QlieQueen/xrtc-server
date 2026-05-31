@@ -18,6 +18,7 @@ enum class DtlsTransportState {
     k_new,
     k_connecting,
     k_connected,
+    k_closed,
     k_failed,
     k_num_values
 };
@@ -76,6 +77,7 @@ public:
     sigslot::signal2<DtlsTransport*, DtlsTransportState> signal_dtls_state;
     sigslot::signal1<DtlsTransport*> signal_writable_state;
     sigslot::signal4<DtlsTransport*, const char*, size_t, int64_t> signal_read_packet;
+    sigslot::signal1<DtlsTransport*> signal_closed;
 
 private:
     void _on_read_packet(IceTransportChannel* channel, const char* buf, size_t size, int64_t ts);
@@ -85,6 +87,8 @@ private:
     void _set_writable_state(bool writable);
     bool _handle_dtls_packet(const char* data, size_t size);
     void _on_writable_state(IceTransportChannel* channel);
+    void _on_dtls_event(rtc::StreamInterface* dtls, int sig, int error);
+    void _on_dtls_handshake_error(rtc::SSLHandshakeError error);
 
 private:
     IceTransportChannel* _channel = nullptr;

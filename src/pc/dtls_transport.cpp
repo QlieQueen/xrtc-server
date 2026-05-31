@@ -203,13 +203,11 @@ void DtlsTransport::_on_read_packet(IceTransportChannel* /*channel*/,
                     return;
                 }
             } else {   // RTP/RTCP 包
-                /*
                 if (_dtls_state != DtlsTransportState::k_connected) {
                     RTC_LOG(LS_WARNING) << to_string() << ": Received non DTLS packet "
                         << "before DTLS complete";
                     return;
                 }
-                */
 
                 if (!is_rtp_packet(buf, len)) {
                     RTC_LOG(LS_WARNING) << to_string() << ": Received unexpected non "
@@ -254,6 +252,10 @@ bool DtlsTransport::_setup_dtls() {
     _dtls->SetMode(rtc::SSL_MODE_DTLS);
     _dtls->SetMaxProtocolVersion(rtc::SSL_PROTOCOL_DTLS_12);
     _dtls->SetServerRole(rtc::SSL_SERVER);
+    // 订阅 _dtls 信号: SignalEvent 通知握手完成/解密数据就绪, SignalSSLHandshakeError 通知握手失败
+    _dtls->SignalEvent.connect(this, &DtlsTransport::_on_dtls_event);
+    _dtls->SignalSSLHandshakeError.connect(this,
+            &DtlsTransport::_on_dtls_handshake_error);
 
     if (_remote_fingerprint_value.size() && !_dtls->SetPeerCertificateDigest(
                 _remote_fingerprint_alg,
@@ -278,6 +280,57 @@ bool DtlsTransport::_setup_dtls() {
     _maybe_start_dtls();
 
     return true;
+}
+
+// _on_dtls_event — _dtls 的信号回调: SE_OPEN 握手完成 / SE_READ 解密数据就绪 / SE_CLOSE 连接关闭
+void DtlsTransport::_on_dtls_event(rtc::StreamInterface* dtls, int sig, int error) {
+    if (sig & rtc::SE_OPEN) {
+        _set_writable_state(true);
+        _set_dtls_state(DtlsTransportState::k_connected);
+    }
+
+    if (sig & rtc::SE_READ) {
+
+        rtc::StreamResult ret;
+        do {
+            char buf[k_max_dtls_packet_len] = { 0 };
+            size_t read;
+            int read_error;
+            ret = _dtls->Read(buf, sizeof(buf), &read, &read_error);
+            if (ret == rtc::SR_SUCCESS) {
+
+            } else if (ret == rtc::SR_EOS) {
+                RTC_LOG(LS_INFO) << to_string() << ": DTLS transport closed by remote";
+                _set_writable_state(false);
+                _set_dtls_state(DtlsTransportState::k_closed);
+                signal_closed(this);
+            } else if (ret == rtc::SR_ERROR) {
+                RTC_LOG(LS_WARNING) << to_string() << ": Closed DTLS transport by remote "
+                    << "with error, code=" << read_error;
+                _set_writable_state(false);
+                _set_dtls_state(DtlsTransportState::k_closed);
+                signal_closed(this);
+            }
+        } while (ret == rtc::SR_SUCCESS);
+    }
+
+    if (sig & rtc::SE_CLOSE) {
+        if (!error) {
+            RTC_LOG(LS_INFO) << to_string() << ": DTLS transport closed";
+            _set_writable_state(false);
+            _set_dtls_state(DtlsTransportState::k_closed);
+        } else {
+            RTC_LOG(LS_INFO) << to_string() << ": DTLS transport with error, "
+                << "code=" << error;
+            _set_writable_state(false);
+            _set_dtls_state(DtlsTransportState::k_failed);
+        }
+    }
+}
+
+// _on_dtls_handshake_error — 握手失败回调
+void DtlsTransport::_on_dtls_handshake_error(rtc::SSLHandshakeError error) {
+    RTC_LOG(LS_INFO) << ": DTLS handshake error=" << (int)error;
 }
 
 // ============================================================================
