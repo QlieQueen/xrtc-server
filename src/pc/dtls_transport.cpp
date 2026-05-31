@@ -1,6 +1,7 @@
 #include "pc/dtls_transport.h"
 
 #include <rtc_base/logging.h>
+#include <api/crypto/crypto_options.h>
 #include <absl/strings/string_view.h>
 
 namespace xrtc {
@@ -16,6 +17,8 @@ const size_t k_dtls_handshake_value_offset = 17;
 
 const size_t k_max_dtls_packet_len = 2048;
 const size_t k_max_pending_packets = 2;
+
+const size_t k_min_rtp_packet_len = 12;
 
 // ============================================================================
 // is_dtls_packet — 判断是否为合法 DTLS Record
@@ -47,6 +50,12 @@ bool is_dtls_client_hello_packet(const char* buf, size_t len) {
 
     const uint8_t* u = reinterpret_cast<const uint8_t*>(buf);
     return len > k_dtls_handshake_value_offset && (u[0] == 22 && u[13] == 1);
+}
+
+// is_rtp_packet — RTP 包识别: version bits == 2 (u[0] & 0xC0 == 0x80) 且长度 >= 12
+bool is_rtp_packet(const char* buf, size_t len) {
+    const uint8_t* u = reinterpret_cast<const uint8_t*>(buf);
+    return len >= k_min_rtp_packet_len && ((u[0] & 0xC0) == 0x80);
 }
 
 
@@ -124,6 +133,9 @@ DtlsTransport::DtlsTransport(IceTransportChannel* channel) :
 {
     _channel->signal_read_packet.connect(this, &DtlsTransport::_on_read_packet);
     _channel->signal_writable_state_change.connect(this, &DtlsTransport::_on_writable_state);
+
+    webrtc::CryptoOptions crypto_options;
+    _srtp_ciphers = crypto_options.GetSupportedDtlsSrtpCryptoSuites();
 }
 
 DtlsTransport::~DtlsTransport() {
@@ -155,9 +167,9 @@ void DtlsTransport::_on_writable_state(IceTransportChannel* channel) {
 // DtlsTransport::_on_read_packet — ICE 层转发的非 STUN 数据
 //
 // k_new: 缓存 ClientHello, 等 DTLS 启动后重放
-// k_connecting / k_connected: DTLS 包注入 OpenSSL, RTP/RTCP 暂未处理
+// k_connecting / k_connected: DTLS 包注入 OpenSSL, RTP/RTCP 经 is_rtp_packet 校验后向上层转发
 void DtlsTransport::_on_read_packet(IceTransportChannel* /*channel*/,
-        const char* buf, size_t len, int64_t /*ts*/)
+        const char* buf, size_t len, int64_t ts)
 {
     switch (_dtls_state) {
         case DtlsTransportState::k_new:
@@ -190,8 +202,24 @@ void DtlsTransport::_on_read_packet(IceTransportChannel* /*channel*/,
                     RTC_LOG(LS_WARNING) << to_string() << ": handle Dtls packet failed";
                     return;
                 }
-            } else {   // RTP/RTCP包
-                // todo
+            } else {   // RTP/RTCP 包
+                /*
+                if (_dtls_state != DtlsTransportState::k_connected) {
+                    RTC_LOG(LS_WARNING) << to_string() << ": Received non DTLS packet "
+                        << "before DTLS complete";
+                    return;
+                }
+                */
+
+                if (!is_rtp_packet(buf, len)) {
+                    RTC_LOG(LS_WARNING) << to_string() << ": Received unexpected non "
+                        << "RTP/RTCP packet";
+                    return;
+                }
+
+                // RTP/RTCP — 经 is_rtp_packet 校验后向上层发射 signal_read_packet
+                RTC_LOG(LS_INFO) << "======================rtp received: " << len;
+                signal_read_packet(this, buf, len, ts);
             }
 
             break;
@@ -234,6 +262,15 @@ bool DtlsTransport::_setup_dtls() {
     {
         RTC_LOG(LS_WARNING) << to_string() << ": Failed to set remote fingerprint";
         return false;
+    }
+
+    if (!_srtp_ciphers.empty()) {
+        if (!_dtls->SetDtlsSrtpCryptoSuites(_srtp_ciphers)) {
+            RTC_LOG(LS_WARNING) << to_string() << ": Failed to set DTLS-SRTP crypto suites";
+            return false;
+        }
+    } else {
+        RTC_LOG(LS_WARNING) << to_string() << ": Not using DTLS-SRTP";
     }
 
     RTC_LOG(LS_INFO) << to_string() << ": Setup DTLS complete";

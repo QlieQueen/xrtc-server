@@ -75,6 +75,7 @@ public:
 public:
     sigslot::signal2<DtlsTransport*, DtlsTransportState> signal_dtls_state;
     sigslot::signal1<DtlsTransport*> signal_writable_state;
+    sigslot::signal4<DtlsTransport*, const char*, size_t, int64_t> signal_read_packet;
 
 private:
     void _on_read_packet(IceTransportChannel* channel, const char* buf, size_t size, int64_t ts);
@@ -98,6 +99,7 @@ private:
     std::string _remote_fingerprint_alg;
     // _dtls_active 标记证书已设置, 防止 DTLS 启动后更换证书
     bool _dtls_active = false;
+    std::vector<int> _srtp_ciphers;
 }; 
 
 } // namespace xrtc
