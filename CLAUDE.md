@@ -261,37 +261,27 @@ Parsed via `yaml-cpp` into `GeneralConf` / `SignalingServerOptions` / `RtcServer
 | 7 | ANSWER + set_remote_sdp | ✅ | — |
 | 8 | STUN 消息编解码 | ✅ | `d3ca1b3` |
 | **9** | **ICE 连接状态机 + Controller** | **✅ done** | `9bb997d` (21/21) |
-| 10 | DTLS 握手 + SRTP | pending | — |
+| **10** | **DTLS 握手 + SRTP** | **✅ done** | `b01ce7f` → `f5719ec` (11/12, DtlsSrtpTransport 留 Phase 11) |
 | 11 | PC/ICE/Agent 状态聚合 | pending | — |
 | 12 | PULL 流 + STOP 命令 | pending | — |
 | 13 | RTP/RTCP 数据转发 | pending | — |
 | 14 | 异常处理 + 完整联调 | pending | — |
 
-### Phase 9 当前进度
+### Phase 10 当前进度
 
-- **参考项目**: `/home/ydqun/workspace/webrtc/xrtcserver`, commits `a0bdda8` → `9bb997d` (21 个)
-- **已完成**: 19/21 commits
-  - ✅ commit 1: UDP 高性能发送 (用户提前实现)
-  - ✅ commit 2: ICE 连接保活 (用户提前实现)
-  - ✅ commit 3: StunErrorCodeAttribute + send_binding_error_response (`1.5.52`)
-  - ✅ commit 4: IceController + WriteState + 连通性检查首次启动 (`1.5.53`)
-  - ✅ commit 5: ICE 传输通道 ping 周期 — 定时器 + ping 间隔常量 + 凭据补填 (`1.5.53`/`1.5.54`)
-  - ✅ commit 6: ICE 连接 ping 优先级选择 — 两层限速 + 自适应退避 (`1.5.54`)
-  - ✅ commit 7: 选择一个连接执行 ping — round-robin 公平选择 (`1.5.55`)
-  - ✅ commit 8: 构造 STUN 绑定请求 — ConnectionRequest::prepare (`1.5.56`)
-  - ✅ commit 17: STUN 错误响应处理 — on_connection_request_error_response + 内存泄漏修复 + mark_connection_pinged (`1.5.65`)
-  - ✅ commit 18: 设置 Candidate pair 状态 — IceCandidatePairState 枚举 + 状态流转 + 销毁链路 (`1.5.66`)  - ✅ commit 9: ICE 普通提名和积极提名 — USE-CANDIDATE (`1.5.57`)
-  - ✅ commit 10: 发送 STUN ping 请求 — signal/slot 发送链路 (`1.5.58`)
-  - ✅ commit 11: 处理 STUN 响应 — check_response 匹配分发 + MI 校验 (`1.5.59`)
-  - ✅ commit 12: RTT 计算与 ping 日志 — elapsed() + print_pings_since_last_response (`1.5.60`)
-  - ✅ commit 13: ICE 连接读写状态更新 — received_ping_response + update_receiving + set_write_state + signal_state_change (`1.5.61`)
-  - ✅ commit 14: 选中连接切换策略 — sort_and_switch_connection + _compare_connections 4级优先级 + signal_state_change 链路 (`1.5.62`)
-  - ✅ commit 15: RTT 指数平滑 + RFC 5245 pair priority + _compare_connections 第5级 + RTT fallback (`1.5.63`)
-  - ✅ commit 16: 开始切换 selected 连接 — _ready_to_send + _maybe_switch_selected_connection (`1.5.64`)
-  - ✅ commit 17: STUN 错误响应处理 — on_connection_request_error_response + 内存泄漏修复 + mark_connection_pinged (`1.5.65`)
-  - ✅ commit 18: 设置 Candidate pair 状态 — IceCandidatePairState 枚举 + 状态流转 + 销毁链路 (`1.5.66`)
-  - ✅ commit 19: 修复 ICE ping 周期 — _is_pingable 单连接间隔 + stable/_miss_response + 条件修正 (`1.5.67`)
-  - ✅ commit 20: ICE 连接探活机制 — update_state 两阶段退化 (`1.5.68`)
-  - ✅ commit 21: ICE 传输通道状态聚合 — _update_state + signal_writable/receiving_state_change (`1.5.69`)
-- **下一步**: Phase 10 `b01ce7f` — DTLS 握手 + SRTP
-- **知识文档**: `note/phase9-background.md`, `note/phase9-connectivity-check-concepts.md`
+- **参考项目**: `/home/ydqun/workspace/webrtc/xrtcserver`, commits `b01ce7f` → `092c650` (12 个)
+- **已完成**: 11/12 commits
+  - ✅ commit 1: DtlsTransport 封装 + signal_read_packet 链路 (`1.5.70`)
+  - ✅ commit 2: ClientHello 缓存 (`1.5.71`)
+  - ✅ commit 3: 安装 DTLS — StreamInterfaceChannel + _setup_dtls (`1.5.72`)
+  - ✅ commit 4: 设置本地证书 + _dtls_active (`1.5.73`)
+  - ✅ commit 5: 设置远程指纹 — 两条时序路径 (`1.5.74`)
+  - ✅ commit 6: 启动 DTLS — _maybe_start_dtls + ClientHello replay + _handle_dtls_packet (`1.5.75`)
+  - ✅ commit 7: DTLS 数据读取 — BufferQueue + _on_writable_state (`1.5.76`)
+  - ✅ commit 8: DTLS 数据写入 — Write() + ICE send_packet 链路 (`1.5.77`)
+  - ✅ commit 9: SRTP 密码套件 + is_rtp_packet + signal_read_packet (`1.5.78`)
+  - ✅ commit 10: DTLS 传输状态 — _on_dtls_event + k_connected/k_closed (`1.5.79`)
+  - ✅ commit 11: DTLS 接收状态 — _on_receiving_state mirror ICE receiving (`1.5.80`)
+- **剩余**: commit 12 `092c650` DtlsSrtpTransport（留到 Phase 11）
+- **下一步**: Phase 11 `092c650` — DtlsSrtpTransport + PC 状态聚合
+- **知识文档**: `note/phase10-background.md`
