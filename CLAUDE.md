@@ -250,7 +250,7 @@ Parsed via `yaml-cpp` into `GeneralConf` / `SignalingServerOptions` / `RtcServer
 
 ## Phase Progress
 
-| Phase | 内容 | 状态 | 最新 commit |
+| Phase | 内容 | 状态 | 参考 commits |
 |-------|------|------|-------------|
 | 1 | TCP xhead 解析 + JSON body | ✅ | — |
 | 2 | 跨线程路由 | ✅ | — |
@@ -259,18 +259,18 @@ Parsed via `yaml-cpp` into `GeneralConf` / `SignalingServerOptions` / `RtcServer
 | 5 | DTLS fingerprint | ✅ | — |
 | 6 | PeerConnection + TransportController | ✅ | — |
 | 7 | ANSWER + set_remote_sdp | ✅ | — |
-| 8 | STUN 消息编解码 | ✅ | `d3ca1b3` |
-| **9** | **ICE 连接状态机 + Controller** | **✅ done** | `9bb997d` (21/21) |
-| **10** | **DTLS 握手 + SRTP** | **✅ done** | `b01ce7f` → `f5719ec` (11/12, DtlsSrtpTransport 留 Phase 11) |
-| 11 | PC/ICE/Agent 状态聚合 | pending | — |
-| 12 | PULL 流 + STOP 命令 | pending | — |
-| 13 | RTP/RTCP 数据转发 | pending | — |
-| 14 | 异常处理 + 完整联调 | pending | — |
+| 8 | STUN 消息编解码 | ✅ | `7012b73` → `c18f33d` (11 commits) |
+| 9 | ICE 连接状态机 + Controller | ✅ | `a0bdda8` → `9bb997d` (21 commits) |
+| **10** | **DTLS 握手 (DtlTransport)** | **✅ done** | `b01ce7f` → `f5719ec` (10 commits) |
+| **11** | **PC/ICE/Agent 三态聚合** | **pending** | `86a58c9` → `fc5ae77` (5 commits) |
+| 12 | PULL 流 + STOP 命令 + SSRC | pending | `d73cd98` → `29eb026` (10 commits) |
+| 13 | DtlsSrtpTransport + SRTP 密钥 + RTP/RTCP 加解密 | pending | `092c650` → `3372f65` (12 commits) |
+| 14 | STOP PULL + 异常处理 + 联调 | pending | `84b1752` → `8e8a514` (3 commits) |
 
 ### Phase 10 当前进度
 
-- **参考项目**: `/home/ydqun/workspace/webrtc/xrtcserver`, commits `b01ce7f` → `092c650` (12 个)
-- **已完成**: 11/12 commits
+- **参考项目**: `/home/ydqun/workspace/lession/xrtcserver`, commits `b01ce7f` → `f5719ec` (10 commits)
+- **已完成**: 10/10 commits ✅
   - ✅ commit 1: DtlsTransport 封装 + signal_read_packet 链路 (`1.5.70`)
   - ✅ commit 2: ClientHello 缓存 (`1.5.71`)
   - ✅ commit 3: 安装 DTLS — StreamInterfaceChannel + _setup_dtls (`1.5.72`)
@@ -282,6 +282,59 @@ Parsed via `yaml-cpp` into `GeneralConf` / `SignalingServerOptions` / `RtcServer
   - ✅ commit 9: SRTP 密码套件 + is_rtp_packet + signal_read_packet (`1.5.78`)
   - ✅ commit 10: DTLS 传输状态 — _on_dtls_event + k_connected/k_closed (`1.5.79`)
   - ✅ commit 11: DTLS 接收状态 — _on_receiving_state mirror ICE receiving (`1.5.80`)
-- **剩余**: commit 12 `092c650` DtlsSrtpTransport（留到 Phase 11）
-- **下一步**: Phase 11 `092c650` — DtlsSrtpTransport + PC 状态聚合
-- **知识文档**: `note/phase10-background.md`
+- **注意**: `092c650` (DtlsSrtpTransport) 在参考仓库中位于 Phase 11 之后，不属于 Phase 10
+- **下一步**: Phase 11 `86a58c9` — 计算 PC 状态
+- **知识文档**: `note/phase10-background.md`, `note/phase10-summary.md`
+
+### Phase 11 commit 清单
+
+| # | commit | 内容 |
+|---|--------|------|
+| 1 | `86a58c9` | 计算 PC 的状态 |
+| 2 | `9047639` | 计算 Ice 传输通道的状态 |
+| 3 | `c98be95` | 计算 IceAgent 的状态 |
+| 4 | `d77f345` | 重新计算 PC 状态 |
+| 5 | `fc5ae77` | PC 失败状态下的资源清理 |
+
+### Phase 12 commit 清单
+
+| # | commit | 内容 |
+|---|--------|------|
+| 1 | `d73cd98` | 分发服务支持停止推流 |
+| 2 | `3bb6a82` | 修复编译警告 |
+| 3 | `306556c` | 处理 PULL 命令 |
+| 4 | `5a0f518` | 音视频转发方案设计 |
+| 5 | `f494372` | 解析 SDP 的 SSRC 信息 |
+| 6 | `a0bb515` | 解析 SSRC 组信息 |
+| 7 | `a391d98` | 创建音视频 Track |
+| 8 | `8025d5e` | 获取音视频源 |
+| 9 | `e925bf0` | 设置音视频源 |
+| 10 | `29eb026` | SDP 中增加 SSRC 描述 |
+
+### Phase 13 commit 清单
+
+| # | commit | 内容 |
+|---|--------|------|
+| 1 | `092c650` | 创建 DtlsSrtpTransport 加密传输通道 |
+| 2 | `d52a949` | 从 DTLS 中导出密钥 |
+| 3 | `c442539` | 创建 SRTP 会话并设置参数 |
+| 4 | `7f79ec1` | 引入 libsrtp 库 |
+| 5 | `ad8bbde` | 初始化 libsrtp 库 |
+| 6 | `79057c3` | 创建 SRTP 上下文结构 |
+| 7 | `c68cac3` | 完成 SRTP 的设置和更新方法 |
+| 8 | `a177c95` | 开始安装 DTLS-SRTP |
+| 9 | `e43ac54` | 解复用 RTP 和 RTCP 包 |
+| 10 | `0cc8f93` | RTP 包判断方法 |
+| 11 | `8764293` | RTP 数据包解密 |
+| 12 | `b0ad147` | RTCP 数据包解密 + 获取 RTP/RTCP 数据包 |
+
+### Phase 14 commit 清单
+
+| # | commit | 内容 |
+|---|--------|------|
+| 1 | `01880eb` | 转发 RTP 数据 |
+| 2 | `1cddb36` | 加密 RTP 发送 |
+| 3 | `3372f65` | 加密 RTP + 发送加密 RTCP |
+| 4 | `84b1752` | 处理停止拉流命令 |
+| 5 | `5a1e89b` | 异常处理、代码完善 |
+| 6 | `8e8a514` | 联调通过 |
