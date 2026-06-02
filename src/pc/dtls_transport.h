@@ -71,6 +71,8 @@ public:
     bool set_remote_fingerprint(const std::string& digest_alg,
         const unsigned char* digest_data, size_t digest_len);
 
+    DtlsTransportState dtls_state() { return _dtls_state; } // PC 状态聚合用
+
     std::string to_string();
 
 public:

@@ -9,10 +9,12 @@
 #include "ice/candidate.h"
 #include "ice/port_allocator.h"
 #include "pc/session_description.h"
+#include "pc/peer_connection_def.h"
 
 namespace xrtc {
 
 class DtlsTransport;
+enum class DtlsTransportState;
 
 class TransportController : public sigslot::has_slots<> {
 public:
@@ -28,12 +30,19 @@ public:
     // 信号转发： IceAgent -> TransportController -> PeerConnection
     sigslot::signal4<TransportController*, const std::string&, IceCandidateComponent,
         const std::vector<Candidate>&> signal_candidate_allocate_done;
-    
+    // PC 整体状态变化 → PeerConnection
+    sigslot::signal2<TransportController*, PeerConnectionState> signal_connection_state;
+
 private:
     void _on_candidate_allocator_done(IceAgent* agent,
             const std::string& transport_name,
             IceCandidateComponent component,
             const std::vector<Candidate>& candidates);
+    void _on_dtls_receiving_state(DtlsTransport*);
+    void _on_dtls_writable_state(DtlsTransport*);
+    void _on_dtls_state(DtlsTransport*, DtlsTransportState);
+    void _update_state();
+
     void _add_dtls_transport(DtlsTransport* dtls_transport);
     DtlsTransport* _get_dtls_transport(const std::string& transport_name);
 
@@ -42,6 +51,8 @@ private:
     IceAgent* _ice_agent;
     rtc::RTCCertificate* _local_certificate = nullptr;
     std::map<std::string, DtlsTransport*> _dtls_transport_by_name;
+    // _pc_state — 聚合所有 DtlsTransport 状态计算出的 PC 整体状态
+    PeerConnectionState _pc_state = PeerConnectionState::k_new;
 };
 
 
