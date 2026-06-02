@@ -15,6 +15,17 @@
 
 namespace xrtc {
 
+// IceTransportState — 参考 W3C RTCIceTransportState
+enum class IceTransportState {
+    k_new,
+    k_checking,
+    k_connected,
+    k_completed,
+    k_failed,
+    k_disconnected,
+    k_closed,
+};
+
 class IceTransportChannel : public sigslot::has_slots<> {
 public:
     IceTransportChannel(EventLoop* el, PortAllocator* alloctor,
@@ -27,6 +38,8 @@ public:
     IceParameters remote_ice_params() const { return _remote_ice_params; }
     bool writable() { return _writable; }
     bool receiving() { return _receiving; }
+    IceTransportState state() { return _state; }   // ICE 整体状态, IceAgent 聚合用
+
     const std::string& transport_name() { return _transport_name; }
     IceCandidateComponent component() { return _component; }
     void gathering_candidate();
@@ -39,6 +52,7 @@ public:
         signal_candidate_allocate_done;
     sigslot::signal<IceTransportChannel*> signal_receiving_state_change;
     sigslot::signal<IceTransportChannel*> signal_writable_state_change;
+    sigslot::signal<IceTransportChannel*> signal_ice_state_change;  // → IceAgent 聚合
     sigslot::signal4<IceTransportChannel*, const char*, size_t, int64_t> signal_read_packet; 
 
 private:
@@ -60,6 +74,7 @@ private:
     void _update_state();
     void _set_receiving(bool receiving);
     void _set_writable(bool writable);
+    IceTransportState _compute_ice_transport_state();
 
     // libev 定时器回调函数，声明为 friend 以访问私有成员 _on_check_and_ping
     friend void ice_ping_cb(EventLoop* /*el*/, TimerWatcher* /*w*/, void* data);
@@ -80,6 +95,10 @@ private:
     IceConnection* _selected_connection = nullptr;
     bool _receiving = false;
     bool _writable = false;
+    // ICE 传输通道状态追踪
+    IceTransportState _state = IceTransportState::k_new;
+    bool _had_connection = false;        // 是否曾创建过连接 (用于检测 k_failed)
+    bool _has_been_connection = false;   // 是否曾经 writable (用于检测 k_disconnected)
 };
 
 

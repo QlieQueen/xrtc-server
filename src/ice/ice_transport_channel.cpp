@@ -191,6 +191,9 @@ void IceTransportChannel::_add_connection(IceConnection* conn) {
         &IceTransportChannel::_on_connection_destroyed);
     conn->signal_read_packet.connect(this,
         &IceTransportChannel::_on_read_packet);
+
+    _had_connection = true; // 标记曾经有连接, _compute_ice_transport_state 用
+
     _ice_controller->add_connection(conn);
 }
 
@@ -264,6 +267,10 @@ void IceTransportChannel::_set_writable(bool writable) {
         return;
     }
 
+    if (writable) {
+        _has_been_connection = true; // 曾经连通过, 用于检测 k_disconnected
+    }
+
     _writable = writable;
     RTC_LOG(LS_INFO) << to_string() << ": Change writable to " << _writable;
     signal_writable_state_change(this);
@@ -288,6 +295,50 @@ void IceTransportChannel::_update_state() {
     }
 
     _set_receiving(receiving);
+
+    // 新增: 计算 ICE Transport 状态并通知 IceAgent
+    IceTransportState state = _compute_ice_transport_state();
+    if (state != _state) {
+        _state = state;
+        signal_ice_state_change(this);
+    }
+}
+
+// ========================================================================
+// _compute_ice_transport_state — 根据连接状态计算 ICE Transport 状态
+//
+// 两阶段标记:
+//   _had_connection:      曾创建过连接 → 如果现在一个 active 都没有 → k_failed
+//   _has_been_connection: 曾经 writable → 如果现在不是 writable → k_disconnected
+//
+// 判断优先级: failed > disconnected > new > checking > connected
+// ========================================================================
+IceTransportState IceTransportChannel::_compute_ice_transport_state() {
+    bool has_connection = false;
+    for (auto conn : _ice_controller->connections()) {
+        if (conn->active()) {
+            has_connection = true;
+            break;
+        }
+    }
+
+    if (_had_connection && !has_connection) {
+        return IceTransportState::k_failed;
+    }
+
+    if (_has_been_connection && !writable()) {
+        return IceTransportState::k_disconnected;
+    }
+
+    if (!_had_connection && !has_connection) {
+        return IceTransportState::k_new;
+    }
+
+    if (has_connection && !writable()) {
+        return IceTransportState::k_checking;
+    }
+
+    return IceTransportState::k_connected;
 }
 
 // ============================================================================
