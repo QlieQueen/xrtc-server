@@ -47,10 +47,74 @@ bool IceAgent::create_channel(EventLoop* el, const std::string& transport_name,
     auto channel = new IceTransportChannel(el, _allocator, transport_name, component);
     channel->signal_candidate_allocate_done.connect(this,
         &IceAgent::_on_candidate_allocate_done);
-    
+    channel->signal_receiving_state_change.connect(this,
+        &IceAgent::_on_receiving_state_change);
+    channel->signal_writable_state_change.connect(this,
+        &IceAgent::_on_writable_state_change);
+    channel->signal_ice_state_change.connect(this,
+        &IceAgent::_on_ice_state_change);
+        
     _channels.push_back(channel);
 
     return true;
+}
+
+void IceAgent::_on_receiving_state_change(IceTransportChannel* /*channel*/) {
+    _update_state();
+}
+
+void IceAgent::_on_writable_state_change(IceTransportChannel* /*channel*/) {
+    _update_state();
+}
+
+void IceAgent::_on_ice_state_change(IceTransportChannel* /*channel*/) {
+    _update_state();
+}
+
+// _update_state — 聚合所有 IceTransportChannel 的状态到 Agent 级
+// 规则: failed > disconnected > new > checking > completed > connected
+void IceAgent::_update_state() {
+    IceTransportState ice_state = IceTransportState::k_new;
+    std::map<IceTransportState, int> ice_state_count;
+    for (auto channel : _channels) {
+        ice_state_count[channel->state()]++;
+    }
+
+
+    int total_ice_new = ice_state_count[IceTransportState::k_new];
+    int total_ice_checking = ice_state_count[IceTransportState::k_checking];
+    int total_ice_connected = ice_state_count[IceTransportState::k_connected];
+    int total_ice_completed = ice_state_count[IceTransportState::k_completed];
+    int total_ice_failed = ice_state_count[IceTransportState::k_failed];
+    int total_ice_disconnected = ice_state_count[IceTransportState::k_disconnected];
+    int total_ice_closed = ice_state_count[IceTransportState::k_closed];
+    int total_ice = _channels.size();
+
+    if (total_ice_failed > 0) {
+        ice_state = IceTransportState::k_failed;
+    } else if (total_ice_disconnected > 0) {
+        ice_state = IceTransportState::k_disconnected;
+    } else if (total_ice_new + total_ice_closed == total_ice) {
+        ice_state = IceTransportState::k_new;
+    } else if (total_ice_new + total_ice_checking > 0) {
+        ice_state = IceTransportState::k_checking;
+    } else if (total_ice_completed + total_ice_closed == total_ice) {
+        ice_state = IceTransportState::k_completed;
+    } else if (total_ice_connected + total_ice_completed + total_ice_closed == total_ice) {
+        ice_state = IceTransportState::k_connected;
+    }
+
+    if (_ice_state != ice_state) {
+        // 为了保证不跳过k_connected状态
+        if (_ice_state == IceTransportState::k_checking
+                && ice_state == IceTransportState::k_completed)
+        {
+            signal_ice_state(this, IceTransportState::k_connected);
+        }
+
+        _ice_state = ice_state;
+        signal_ice_state(this, _ice_state);
+    }
 }
 
 std::vector<IceTransportChannel*>::iterator IceAgent::_get_channel(
