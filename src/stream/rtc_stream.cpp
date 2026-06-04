@@ -21,17 +21,21 @@ void RtcStream::_on_connection_state(PeerConnection*, PeerConnectionState state)
         return;
     }
 
-    RTC_LOG(LS_INFO) << "PeerConnectionState change from " << _state
+    RTC_LOG(LS_INFO) << to_string() << ": PeerConnectionState change from " << _state
         << " to " << state;
     _state = state;
-}
 
-RtcStream::~RtcStream() {
-    if (_pc) {
-        delete _pc;
-        _pc = nullptr;
+    if (_listener) {
+        _listener->on_connection_state(this, state);
     }
 
+}
+
+// 不直接 delete _pc: ~PeerConnection() 是 private 的, 必须走 destroy()
+// destroy() 将 delete pc 延迟到 10ms timer 中执行, 避免在 ICE/DTLS timer
+// 回调链中 re-entrant destruction 导致 coredump (crash 路径见 peer_connection.cpp)
+RtcStream::~RtcStream() {
+    _pc->destroy();
 }
 
 void RtcStream::start(rtc::RTCCertificate* certificate) {
@@ -41,5 +45,14 @@ void RtcStream::start(rtc::RTCCertificate* certificate) {
 int RtcStream::set_remote_sdp(const std::string& sdp) {
     return _pc->set_remote_sdp(sdp);
 }
+
+
+std::string RtcStream::to_string() {
+    std::stringstream ss;
+    ss << "Stream[" << this << "|" << _uid << "|" << _stream_name << "]";
+    return ss.str();
+}
+
+
 
 } // namespace xrtc

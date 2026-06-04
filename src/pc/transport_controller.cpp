@@ -14,6 +14,11 @@ TransportController::TransportController(EventLoop* el, PortAllocator* alloctor)
 
 // 析构函数 -- delete IceAgent
 TransportController::~TransportController() {
+    for (auto dtls : _dtls_transport_by_name) {
+        delete dtls.second;
+    }
+    _dtls_transport_by_name.clear();
+
     if (_ice_agent) {
         delete _ice_agent;
         _ice_agent = nullptr;

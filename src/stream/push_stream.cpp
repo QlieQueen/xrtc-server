@@ -16,6 +16,7 @@ PushStream::PushStream(EventLoop* el, PortAllocator* alloctor, uint64_t uid, con
 }
 
 PushStream::~PushStream() {
+    RTC_LOG(LS_INFO) << to_string() << ": Push stream destroy.";
 }
 
 std::string PushStream::create_offer() {

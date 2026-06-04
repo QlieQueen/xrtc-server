@@ -27,7 +27,9 @@ int RtcStreamManager::create_push_stream(uint64_t uid, const std::string& stream
     rtc::RTCCertificate* certificate,
     std::string& offer)
 {
-    PushStream* stream = new PushStream(_el, _allocator.get(), uid, stream_name, audio, video, log_id);
+    PushStream* stream = new PushStream(_el, _allocator.get(), uid, stream_name,
+        audio, video, log_id);
+    stream->register_listener(this);
     stream->start(certificate);
     offer = stream->create_offer();
 
@@ -78,6 +80,30 @@ PushStream* RtcStreamManager::_find_push_stream(const std::string& stream_name) 
     }
 
     return nullptr;
+}
+
+void RtcStreamManager::_remove_push_stream(RtcStream* stream) {
+    const std::string& stream_name = stream->get_stream_name();
+    PushStream* push_stream = _find_push_stream(stream_name);
+    if (push_stream) {
+        _push_streams.erase(stream_name);
+        delete push_stream;
+    }
+
+}
+
+
+// PC 状态监听: k_failed 时触发资源清理
+// delete push_stream → ~RtcStream() → _pc->destroy() → 10ms timer → delete pc
+// 延迟析构链保证不在 ICE/DTLS timer 回调栈内释放对象 (避免 re-entrant destruction coredump)
+void RtcStreamManager::on_connection_state(RtcStream* stream,
+        PeerConnectionState state)
+{
+    if (state == PeerConnectionState::k_failed) {
+        if (stream->stream_type() == RtcStreamType::k_push) {
+            _remove_push_stream(stream);
+        }
+    }
 }
 
 } // namespace xrtc

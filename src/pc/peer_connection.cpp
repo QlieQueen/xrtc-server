@@ -42,12 +42,44 @@ void PeerConnection::_on_connection_state(TransportController*, PeerConnectionSt
 }
 
 PeerConnection::~PeerConnection() {
+    if (_destroy_timer) {
+        _el->delete_timer(_destroy_timer);
+        _destroy_timer = nullptr;
+    }
+    
+    RTC_LOG(LS_INFO) << "PeerConnection destroy";
 }
 
 int PeerConnection::init(rtc::RTCCertificate* certificate) {
     _certificate = certificate;
     _transport_controller->set_local_certificate(certificate);
     return 0;
+}
+
+// 延迟析构回调: 在干净调用栈中 delete pc, 避免 re-entrant destruction
+//
+// 问题场景: ICE ping timer → _on_check_and_ping() → _update_connection_states()
+// → conn timeout → signal 层层上报 → RtcStreamManager  delete push_stream
+// → ~RtcStream() → _pc->destroy() → 本方法将 delete pc 推迟到 timer 中执行
+//
+// 如果不推迟, _on_check_and_ping 返回后会访问已析构的 _ice_controller → coredump
+void destroy_timer_cb(EventLoop* /*el*/, TimerWatcher* /*w*/, void* data) {
+    PeerConnection* pc = (PeerConnection*)data;
+    delete pc;
+}
+
+// destroy() — 延迟 10ms 析构 PeerConnection, 规避 timer 回调内的 re-entrant destruction
+//
+// 10ms: 足够当前 event loop 迭代完成并返回到 libev, 但人眼无感知
+// false: 一次性 timer, 触发后自动注销
+void PeerConnection::destroy() {
+    if (_destroy_timer) {
+        _el->delete_timer(_destroy_timer);
+        _destroy_timer = nullptr;
+    }
+
+    _destroy_timer = _el->create_timer(destroy_timer_cb, this, false);
+    _el->start_timer(_destroy_timer, 10000);
 }
 
 // create_offer() - 自身构造SDP -> 调 TransportController -> 返回 SDP

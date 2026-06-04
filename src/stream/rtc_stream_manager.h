@@ -7,6 +7,7 @@
 
 #include <rtc_base/rtc_certificate.h>
 
+#include "stream/rtc_stream.h"
 #include "ice/port_allocator.h"
 
 namespace xrtc {
@@ -14,7 +15,7 @@ namespace xrtc {
 class EventLoop;
 class PushStream;
 
-class RtcStreamManager {
+class RtcStreamManager : public RtcStreamListener {
 public:
     RtcStreamManager(EventLoop* el);
     ~RtcStreamManager();
@@ -32,8 +33,11 @@ public:
     int set_answer(uint64_t uid, const std::string& stream_name,
         const std::string& answer, const std::string& stream_type, uint32_t log_id);
 
+    void on_connection_state(RtcStream* stream, PeerConnectionState state) override;
+
 private:
     PushStream* _find_push_stream(const std::string& stream_name);
+    void _remove_push_stream(RtcStream* stream);
 
 private:
     EventLoop* _el = nullptr;

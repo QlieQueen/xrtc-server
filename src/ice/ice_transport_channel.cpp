@@ -42,12 +42,19 @@ IceTransportChannel::~IceTransportChannel() {
         _ping_watcher = nullptr;
     }
 
+    std::vector<IceConnection*> connections = _ice_controller->connections();
+    for (auto connection : connections) {
+        connection->destroy();
+    }
+
     for (auto port : _ports) {
         delete port;
     }
-
     _ports.clear();
 
+    _ice_controller.reset(nullptr);
+
+    RTC_LOG(LS_INFO) << to_string() << ": IceTransportChannel destroy";
 }
 
 void IceTransportChannel::set_ice_params(const IceParameters& ice_params) {
@@ -97,6 +104,7 @@ void IceTransportChannel::gathering_candidate() {
     for (auto network : network_list) {
         UDPPort* port = new UDPPort(_el, _transport_name, _component, _ice_params);
         port->signal_unknown_address.connect(this, &IceTransportChannel::_on_unknown_address);
+
         _ports.push_back(port);
 
         Candidate c;
@@ -426,20 +434,21 @@ void IceTransportChannel::_maybe_start_pinging() {
 // 由定时器 ice_ping_cb 回调触发 (周期 = _cur_ping_interval)。
 //
 // 流程:
-//   1. controller 选择本周期要 ping 的连接 + 返回新的 ping_interval
-//   2. 如果选中了连接 → _ping_connection 发出 ping
-//   3. 如果 interval 变化 (480ms↔48ms): 重启定时器
+//   1. _update_connection_states → 可能触发 conn timeout → k_failed → 资源清理
+//      **注意**: 后续对 _ice_controller 的访问依赖 PeerConnection::destroy()
+//      的延迟析构机制。如果在 conn timeout 回调链中同步 delete this, 此处会
+//      访问已析构的 _ice_controller 导致 coredump。
+//   2. controller 选择本周期要 ping 的连接 + 返回新的 ping_interval
+//   3. 如果选中了连接 → _ping_connection 发出 ping
+//   4. 如果 interval 变化 (480ms↔48ms): 重启定时器
 //      - 降级 (strong→weak): 480ms→48ms, 立即加速探测
 //      - 升级 (weak→strong): 48ms→480ms, 节省带宽
-//   4. 后续 commit: 检查超时、更新状态、切换连接
+//   5. 后续 commit: 检查超时、更新状态、切换连接
 // ============================================================================
 void IceTransportChannel::_on_check_and_ping() {
     _update_connection_states();
     auto result = _ice_controller->select_connection_to_ping(
         _last_ping_sent_ms - PING_INTERVAL_DIFF);
-
-    RTC_LOG(LS_WARNING) << to_string() << ": ping result, conn: " << result.conn
-        << ", ping interval: " << result.ping_interval;
 
     if (result.conn) {
         IceConnection* conn = const_cast<IceConnection*>(result.conn);

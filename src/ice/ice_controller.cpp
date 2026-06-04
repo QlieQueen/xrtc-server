@@ -320,9 +320,6 @@ bool IceController::_is_connection_past_ping_interval(const IceConnection* conn,
         int64_t now)
 {
     int interval = _get_connection_ping_interval(conn, now);
-    RTC_LOG(LS_INFO) << "=======================conn: " << conn
-        << ", conn ping interval: " << interval
-        << ", last_ping_sent: " << conn->last_ping_sent();
     return now >= conn->last_ping_sent() + interval;
 }
 

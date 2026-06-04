@@ -13,6 +13,7 @@ public:
     ~PushStream() override;
 
     std::string create_offer() override;
+    RtcStreamType stream_type() override { return RtcStreamType::k_push; }
 
 private:
 };

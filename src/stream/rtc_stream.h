@@ -1,6 +1,7 @@
 #ifndef __RTC_STREAM_H_
 #define __RTC_STREAM_H_
 
+#include <memory>
 #include <string>
 #include <stdint.h>
 
@@ -13,6 +14,18 @@
 namespace xrtc {
 
 class EventLoop;
+class RtcStream;
+
+enum class RtcStreamType {
+    k_push,
+    k_pull
+};
+
+class RtcStreamListener {
+public:
+    virtual void on_connection_state(RtcStream* stream, PeerConnectionState state) = 0;
+};
+
 
 class RtcStream : public sigslot::has_slots<> {
 public:
@@ -24,9 +37,14 @@ public:
     void start(rtc::RTCCertificate* certificate);
 
     virtual std::string create_offer() = 0;
+    virtual RtcStreamType stream_type() = 0;
     int set_remote_sdp(const std::string& sdp);
+    void register_listener(RtcStreamListener* listener) { _listener = listener; }
+
     uint64_t get_uid() { return _uid; }
     std::string get_stream_name() { return _stream_name; }
+
+    std::string to_string();
 
 private:
     void _on_connection_state(PeerConnection*, PeerConnectionState state);
@@ -41,6 +59,7 @@ protected:
 
     PeerConnection* _pc;
     PeerConnectionState _state = PeerConnectionState::k_new;
+    RtcStreamListener* _listener = nullptr;
 };
 
 

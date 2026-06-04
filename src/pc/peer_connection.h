@@ -18,9 +18,10 @@ namespace xrtc {
 class PeerConnection : public sigslot::has_slots<> {
 public:
     PeerConnection(EventLoop* _el, PortAllocator* allocator);
-    ~PeerConnection();
 
     int init(rtc::RTCCertificate* certificate);
+    void destroy();
+
     std::string create_offer(const RTCOfferAnswerOptions& options);
     int set_remote_sdp(const std::string& sdp);
 
@@ -28,6 +29,11 @@ public:
     sigslot::signal2<PeerConnection*, PeerConnectionState> signal_connection_state;
 
 private:
+    // 延迟析构: 禁止外部直接 delete pc, 必须通过 destroy() → timer → delete pc
+    // 否则在 ICE timer 回调链中析构 PC 会导致 re-entrant destruction coredump
+    // (timer 回调还在 _on_check_and_ping 调用栈中, this 已被析构)
+    friend void destroy_timer_cb(EventLoop* el, TimerWatcher* w, void* data);
+    ~PeerConnection();
     void _on_candidate_allocate_done(TransportController*,
             const std::string& transport_name,
             IceCandidateComponent component,
@@ -40,6 +46,7 @@ private:
     std::unique_ptr<SessionDescription> _remote_desc;
     rtc::RTCCertificate* _certificate = nullptr;
     std::unique_ptr<TransportController> _transport_controller;
+    TimerWatcher* _destroy_timer = nullptr;
 };
 
 } // namespace xrtc
