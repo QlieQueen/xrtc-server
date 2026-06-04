@@ -61,6 +61,7 @@ public:
 
     const std::string& transport_name() { return _channel->transport_name(); }
     IceCandidateComponent component() { return _channel->component(); }
+    IceTransportChannel* ice_channel() { return _channel; }  // 供 TransportController 聚合 ICE 状态
 
     // ========================================================================
     // set_local_certificate — 设置 DTLS 本地证书

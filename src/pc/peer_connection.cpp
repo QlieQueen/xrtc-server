@@ -32,6 +32,13 @@ PeerConnection::PeerConnection(EventLoop* el, PortAllocator* allocator) :
 {
     _transport_controller->signal_candidate_allocate_done.connect(this,
         &PeerConnection::_on_candidate_allocate_done);
+    _transport_controller->signal_connection_state.connect(this,
+        &PeerConnection::_on_connection_state);
+}
+
+// _on_connection_state — TransportController 聚合后的 PC 状态 → 向上转发给 RtcStream
+void PeerConnection::_on_connection_state(TransportController*, PeerConnectionState state) {
+    signal_connection_state(this, state);
 }
 
 PeerConnection::~PeerConnection() {

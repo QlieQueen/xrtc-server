@@ -9,7 +9,7 @@ enum class PeerConnectionState {
     k_connected,
     k_disconnected,
     k_failed,
-    k_close,
+    k_closed,
 };
 
 struct RTCOfferAnswerOptions {

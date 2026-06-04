@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include <rtc_base/rtc_certificate.h>
+#include <rtc_base/third_party/sigslot/sigslot.h>
 
 #include "pc/peer_connection.h"
 #include "ice/port_allocator.h"
@@ -13,7 +14,7 @@ namespace xrtc {
 
 class EventLoop;
 
-class RtcStream {
+class RtcStream : public sigslot::has_slots<> {
 public:
     RtcStream(EventLoop* el, PortAllocator* allocator, uint64_t uid,
         const std::string& stream_name, bool audio, bool video, uint32_t log_id);
@@ -27,6 +28,9 @@ public:
     uint64_t get_uid() { return _uid; }
     std::string get_stream_name() { return _stream_name; }
 
+private:
+    void _on_connection_state(PeerConnection*, PeerConnectionState state);
+
 protected:
     EventLoop* _el;
     uint64_t _uid;
@@ -34,7 +38,9 @@ protected:
     bool _audio;
     bool _video;
     uint32_t _log_id;
+
     PeerConnection* _pc;
+    PeerConnectionState _state = PeerConnectionState::k_new;
 };
 
 

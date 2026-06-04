@@ -38,6 +38,7 @@ private:
             const std::string& transport_name,
             IceCandidateComponent component,
             const std::vector<Candidate>& candidates);
+    void _on_ice_state(IceAgent*, IceTransportState);
     void _on_dtls_receiving_state(DtlsTransport*);
     void _on_dtls_writable_state(DtlsTransport*);
     void _on_dtls_state(DtlsTransport*, DtlsTransportState);
