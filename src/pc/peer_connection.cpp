@@ -11,6 +11,18 @@
 
 namespace xrtc {
 
+static RtpDirection get_direction(bool send, bool recv) {
+    if (send && recv) {
+        return RtpDirection::k_send_recv;
+    } else if (send && !recv) {
+        return RtpDirection::k_send_only;
+    } else if (!send && recv) {
+        return RtpDirection::k_recv_only;
+    } else {
+        return RtpDirection::k_inactive;
+    }
+}
+
 // "aceive"/"passive"/"actpass" -> ConnectionRole 枚举
 static ConnectionRole string_to_connection_role(const std::string& role) {
     if (role == "active") {
@@ -93,17 +105,17 @@ std::string PeerConnection::create_offer(const RTCOfferAnswerOptions& options) {
 
     IceParameters ice_params = IceCredentials::create_random_ice_credentials();
 
-    if (options.recv_audio) {
+    if (options.recv_audio || options.send_audio) {
         auto audio = std::make_shared<AudioContentDescription>();
-        audio->set_direction(RtpDirection::k_recv_only);
+        audio->set_direction(get_direction(options.send_audio, options.recv_audio));
         audio->set_rtcp_mux(options.use_rtp_mux);
         _local_desc->add_content(audio);
         _local_desc->add_transport_info(audio->mid(), ice_params, _certificate);
     } 
 
-    if (options.recv_video) {
+    if (options.recv_video || options.send_video) {
         auto video = std::make_shared<VideoContentDescription>();
-        video->set_direction(RtpDirection::k_recv_only);
+        video->set_direction(get_direction(options.send_video, options.recv_video));
         video->set_rtcp_mux(options.use_rtp_mux);
         _local_desc->add_content(video);
         _local_desc->add_transport_info(video->mid(), ice_params, _certificate);
