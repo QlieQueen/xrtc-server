@@ -167,6 +167,23 @@ void RtcWorker::_process_push(std::shared_ptr<RtcMsg>& msg) {
 
 void RtcWorker::_process_pull(std::shared_ptr<RtcMsg>& msg) {
     RTC_LOG(LS_INFO) << "rtc worker process pull request, worker_id: " << _worker_id;
+    std::string offer;
+    int ret = _rtc_stream_mgr->create_pull_stream(msg->uid, msg->stream_name,
+                                        msg->audio, msg->video,
+                                        msg->log_id, (rtc::RTCCertificate*)(msg->certificate), offer);
+    if (ret != 0) {
+        msg->err_no = -1;
+    }
+    
+    RTC_LOG(INFO) << "offer: " << offer;
+    
+    msg->sdp = offer;
+    
+    SignalingWorker* worker = (SignalingWorker*)msg->worker;
+    if (worker) {
+        worker->send_rtc_msg(msg);
+    }
+
 }
 
 void RtcWorker::_process_stop_push(std::shared_ptr<RtcMsg>& msg) {

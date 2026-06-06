@@ -5,6 +5,7 @@
 #include "base/conf.h"
 #include "base/event_loop.h"
 #include "stream/push_stream.h"
+#include "stream/pull_stream.h"
 
 extern xrtc::GeneralConf* g_conf;
 
@@ -48,6 +49,23 @@ int RtcStreamManager::create_pull_stream(uint64_t uid, const std::string& stream
     rtc::RTCCertificate* certificate,
     std::string& offer)
 {
+    PushStream* push_stream = _find_push_stream(stream_name);
+    if (!push_stream) {
+        RTC_LOG(LS_WARNING) << "stream not found, uid: " << uid << ", stream_name: "
+            << stream_name << ", log_id: " << log_id;
+        return -1;
+    }
+
+    _remove_pull_stream(uid, stream_name);
+
+    PullStream* stream = new PullStream(_el, _allocator.get(), uid, stream_name,
+        audio, video, log_id);
+    stream->register_listener(this);
+    stream->start(certificate);
+    offer = stream->create_offer();
+
+    _pull_streams[stream_name] = stream;
+
     return 0;
 }
 
@@ -104,6 +122,31 @@ void RtcStreamManager::_remove_push_stream(uint64_t uid, const std::string& stre
     }
 }
 
+
+PullStream* RtcStreamManager::_find_pull_stream(const std::string& stream_name) {
+    auto iter = _pull_streams.find(stream_name);
+    if (iter != _pull_streams.end()) {
+        return iter->second;
+    }
+
+    return nullptr;
+}
+
+void RtcStreamManager::_remove_pull_stream(RtcStream* stream) {
+    if (!stream) {
+        return;
+    }
+
+    _remove_pull_stream(stream->get_uid(), stream->get_stream_name());
+}
+
+void RtcStreamManager::_remove_pull_stream(uint64_t uid, const std::string& stream_name) {
+    PullStream* pull_stream = _find_pull_stream(stream_name);
+    if (pull_stream && uid == pull_stream->get_uid()) {
+        _pull_streams.erase(stream_name);
+        delete pull_stream;
+    }
+}
 
 // PC 状态监听: k_failed 时触发资源清理
 // delete push_stream → ~RtcStream() → _pc->destroy() → 10ms timer → delete pc
