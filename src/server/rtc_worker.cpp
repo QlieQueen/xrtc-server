@@ -170,7 +170,13 @@ void RtcWorker::_process_pull(std::shared_ptr<RtcMsg>& msg) {
 }
 
 void RtcWorker::_process_stop_push(std::shared_ptr<RtcMsg>& msg) {
-    RTC_LOG(LS_INFO) << "rtc worker process stop push request, worker_id: " << _worker_id;
+    int ret = _rtc_stream_mgr->stop_push(msg->uid, msg->stream_name);
+
+    RTC_LOG(LS_INFO) << "rtc worker process stop push, uid: " << msg->uid
+        << ", stream_name: " << msg->stream_name
+        << ", worker_id: " << _worker_id
+        << ", log_id: " << msg->log_id
+        << ", ret: " << ret;
 }
 
 void RtcWorker::_process_stop_pull(std::shared_ptr<RtcMsg>& msg) {
