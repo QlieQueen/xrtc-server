@@ -112,7 +112,7 @@ IceConnection* UDPPort::get_connection(const rtc::SocketAddress& addr) {
 //   2. 校验通过 → emit signal_unknown_address → 上层创建 prflx candidate
 //   3. 校验失败 → send_binding_error_response (在 get_stun_message 内处理)
 // ============================================================================
-void UDPPort::_on_read_packet(AsyncUdpSocket* socket, char* buf, size_t size,
+void UDPPort::_on_read_packet(AsyncUdpSocket* /*socket*/, char* buf, size_t size,
                 const rtc::SocketAddress& addr, int64_t ts)
 {
     IceConnection* conn = get_connection(addr);

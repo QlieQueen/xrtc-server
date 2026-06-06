@@ -90,7 +90,7 @@ rtc::StreamState StreamInterfaceChannel::GetState() const {
 rtc::StreamResult StreamInterfaceChannel::Read(void* buffer,
                 size_t buffer_len,
                 size_t* read,
-                int* error)
+                int* /*error*/)
 {
     if (_state == rtc::SS_CLOSED) {
         return rtc::SR_EOS;
@@ -111,7 +111,7 @@ rtc::StreamResult StreamInterfaceChannel::Read(void* buffer,
 rtc::StreamResult StreamInterfaceChannel::Write(const void* data,
                 size_t data_len,
                 size_t* written,
-                int* error)
+                int* /*error*/)
 {
     _channel->send_packet((const char*)data, data_len);
     if (written) {
@@ -221,7 +221,6 @@ void DtlsTransport::_on_read_packet(IceTransportChannel* /*channel*/,
                 }
 
                 // RTP/RTCP — 经 is_rtp_packet 校验后向上层发射 signal_read_packet
-                RTC_LOG(LS_INFO) << "======================rtp received: " << len;
                 signal_read_packet(this, buf, len, ts);
             }
 
@@ -288,7 +287,7 @@ bool DtlsTransport::_setup_dtls() {
 }
 
 // _on_dtls_event — _dtls 的信号回调: SE_OPEN 握手完成 / SE_READ 解密数据就绪 / SE_CLOSE 连接关闭
-void DtlsTransport::_on_dtls_event(rtc::StreamInterface* dtls, int sig, int error) {
+void DtlsTransport::_on_dtls_event(rtc::StreamInterface* /*dtls*/, int sig, int error) {
     if (sig & rtc::SE_OPEN) {
         _set_writable_state(true);
         _set_dtls_state(DtlsTransportState::k_connected);

@@ -629,7 +629,7 @@ StunAddressFamily StunAddressAttribute::family() {
     }
 }
 
-bool StunAddressAttribute::read(rtc::ByteBufferReader* buf) {
+bool StunAddressAttribute::read(rtc::ByteBufferReader* /*buf*/) {
     return true;
 }
 
@@ -885,7 +885,7 @@ void StunErrorCodeAttribute::set_reason(const std::string& reason) {
     set_length(MIN_SIZE + reason.size());
 }
 
-bool StunErrorCodeAttribute::read(rtc::ByteBufferReader* buf) {
+bool StunErrorCodeAttribute::read(rtc::ByteBufferReader* /*buf*/) {
     // todo: 错误响应是服务端发出的，暂时不需要解析
     return false;
 }
