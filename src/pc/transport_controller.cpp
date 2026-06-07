@@ -1,6 +1,7 @@
 #include "pc/transport_controller.h"
 
 #include "pc/dtls_transport.h"
+#include "pc/dtls_srtp_transport.h"
 
 namespace xrtc {
 
@@ -59,6 +60,10 @@ int TransportController::set_local_description(SessionDescription* desc) {
         _ice_agent->signal_ice_state.connect(this,
                 &TransportController::_on_ice_state);
         _add_dtls_transport(dtls_transport);
+
+        DtlsSrtpTransport* dtls_srtp = new DtlsSrtpTransport(dtls_transport->transport_name(),
+                true); // 开启rtp/rtcp复用
+        dtls_srtp->set_dtls_transport(dtls_transport, nullptr);
     }
     
     _ice_agent->gathering_candidate();
