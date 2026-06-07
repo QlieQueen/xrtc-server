@@ -258,7 +258,7 @@ static void build_ssrc(std::shared_ptr<MediaContentDescription> content,
                 continue;
             }
 
-            ss << "a=ssrc_group:" << ssrc_group.semantics;
+            ss << "a=ssrc-group:" << ssrc_group.semantics;
             for (auto ssrc : ssrc_group.ssrcs) {
                 ss << " " << ssrc;
             }

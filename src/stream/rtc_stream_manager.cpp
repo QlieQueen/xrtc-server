@@ -56,11 +56,18 @@ int RtcStreamManager::create_pull_stream(uint64_t uid, const std::string& stream
         return -1;
     }
 
+    std::vector<StreamParams> audio_source;
+    std::vector<StreamParams> video_source;
+    push_stream->get_audio_source(audio_source);
+    push_stream->get_video_source(video_source);
+
     _remove_pull_stream(uid, stream_name);
 
     PullStream* stream = new PullStream(_el, _allocator.get(), uid, stream_name,
         audio, video, log_id);
     stream->register_listener(this);
+    stream->add_audio_source(audio_source);
+    stream->add_video_source(video_source);
     stream->start(certificate);
     offer = stream->create_offer();
 
