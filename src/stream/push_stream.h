@@ -15,7 +15,12 @@ public:
     std::string create_offer() override;
     RtcStreamType stream_type() override { return RtcStreamType::k_push; }
 
+    // 提取 remote SDP 中的 audio/video track（StreamParams）， 用于透传 SSRC 给拉流端
+    bool get_audio_source(std::vector<StreamParams>& source);
+    bool get_video_source(std::vector<StreamParams>& source);
+
 private:
+    bool _get_source(const std::string& mid, std::vector<StreamParams>& source);
 };
 
 } // namespace xrtc

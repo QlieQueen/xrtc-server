@@ -32,5 +32,33 @@ std::string PushStream::create_offer() {
     return _pc->create_offer(options);
 }
 
+// 从 remote SDP 提取 audio track（StreamParams），供 PullStream 生成拉流 offer 时透传 SSRC
+bool PushStream::get_audio_source(std::vector<StreamParams>& source) {
+    return _get_source("audio", source);
+}
+
+bool PushStream::get_video_source(std::vector<StreamParams>& source) {
+    return _get_source("video", source);
+}
+
+bool PushStream::_get_source(const std::string& mid, std::vector<StreamParams>& source) {
+    if (!_pc) {
+        return false;
+    }
+
+    auto remote_desc = _pc->remote_desc();
+    if (!remote_desc) {
+        return false;
+    }
+
+    auto content = remote_desc->get_content(mid);
+    if (!content) {
+        return false;
+    }
+
+    source = content->streams();
+    return true;
+}
+
 } // namespace xrtc
 
