@@ -33,11 +33,11 @@ description: "消息流程 + commit-by-commit 方式教学，手写实现 WebRTC
 | 6 | PeerConnection + TransportController | ✅ done | — |
 | 7 | ANSWER + set_remote_sdp | ✅ done | — |
 | 8 | STUN 消息编解码 | ✅ done | `7012b73` → `c18f33d` (11 commits) |
-| **9** | **ICE 连接状态机 + Controller** | **WIP** | `a0bdda8` → `9bb997d` (21 commits) |
-| 10 | DTLS 握手 + SRTP | pending | `b01ce7f` → `092c650` |
-| 11 | PC/ICE/Agent 状态聚合 | pending | `86a58c9` → `fc5ae77` |
-| 12 | PULL 流 + STOP 命令 | pending | `5a0f518` → `84b1752` |
-| 13 | RTP/RTCP 数据转发 | pending | `e43ac54` → `3372f65` |
+| 9 | ICE 连接状态机 + Controller | ✅ done | `a0bdda8` → `9bb997d` (21 commits) |
+| 10 | DTLS 握手 + SRTP | ✅ done | `b01ce7f` → `f5719ec` (10 commits) |
+| 11 | PC/ICE/Agent 三态聚合 | ✅ done | `86a58c9` → `fc5ae77` (5 commits) |
+| 12 | PULL 流 + STOP 命令 + SSRC | ✅ done | `d73cd98` → `29eb026` (10 commits) |
+| **13** | **RTP/RTCP 加解密 + 转发** | **pending** | `092c650` → `3372f65` (12 commits) |
 | 14 | 异常处理 + 完整联调 | pending | `5a1e89b` → `8e8a514` |
 
 ## Phase 8 commit 清单
