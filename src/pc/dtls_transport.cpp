@@ -528,6 +528,27 @@ bool DtlsTransport::_handle_dtls_packet(const char* data, size_t size) {
     return _downward->on_received_packet(data, size);
 }
 
+// get_srtp_crypto_suite — 读取 DTLS 协商的 SRTP 密码套件
+bool DtlsTransport::get_srtp_crypto_suite(int *selected_crypto_suite) {
+    if (_dtls_state != DtlsTransportState::k_connected) {
+        return false;
+    }
+
+    return _dtls->GetDtlsSrtpCryptoSuite(selected_crypto_suite);
+}
+
+// export_keying_material — 委托给 OpenSSL SSL_export_keying_material
+bool DtlsTransport::export_keying_material(const std::string& label,
+        const uint8_t* context,
+        size_t context_len,
+        bool use_context,
+        uint8_t* result,
+        size_t result_len)
+{
+    return _dtls.get() ? _dtls->ExportKeyingMaterial(label, context,
+        context_len, use_context, result, result_len) : false;
+}
+
 std::string DtlsTransport::to_string() {
     std::stringstream ss;
     absl::string_view RECEIVING[2] = {"-", "R"};
