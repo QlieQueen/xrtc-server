@@ -22,7 +22,7 @@ public:
             int recv_cs,
             const uint8_t* recv_key,
             size_t recv_key_len,
-            const std::vector<int>* recv_extension_ids);
+            const std::vector<int>& recv_extension_ids);
 
     void reset_params();
 private:

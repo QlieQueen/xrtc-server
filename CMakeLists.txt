@@ -50,6 +50,7 @@ target_link_libraries(xrtc-server
     libabsl_throw_delegate.a
     libabsl_bad_optional_access.a
     libev.a
+    libsrtp2.a
     -lpthread
 
     -no-pie
@@ -120,6 +121,7 @@ target_link_libraries(xrtc-server-test
     libabsl_throw_delegate.a
     libabsl_bad_optional_access.a
     libabsl_base.a
+    libsrtp2.a
 
     -lpthread
     -no-pie

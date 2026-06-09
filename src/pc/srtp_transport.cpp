@@ -17,7 +17,7 @@ bool SrtpTransport::set_rtp_params(int send_cs,
         int recv_cs,
         const uint8_t* recv_key,
         size_t recv_key_len,
-        const std::vector<int>* recv_extension_ids)
+        const std::vector<int>& recv_extension_ids)
 {
     bool new_session = false;
     if (!_send_session) {
