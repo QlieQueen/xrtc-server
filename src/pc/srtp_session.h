@@ -26,6 +26,10 @@ private:
         const std::vector<int>& extension_ids);
     // 引用计数 + 懒初始化 libsrtp 全局状态（srtp_init 只能调用一次）
     static bool _increment_libsrtp_usage_count_and_maybe_init();
+    // C 回调 thunk — srtp_install_event_handler 注册，从 ev->session 取 user_data 回 this
+    static void _event_handle_thunk(srtp_event_data_t* ev);
+    // 处理 libsrtp 运行时事件（SSRC 冲突、密钥限制、包序号溢出）
+    void _handle_event(srtp_event_data_t* ev); 
 
 private:
     srtp_ctx_t* _session = nullptr;  // libsrtp 会话句柄，srtp_create 后赋值
