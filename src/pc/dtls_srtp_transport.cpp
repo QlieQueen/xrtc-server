@@ -1,8 +1,11 @@
 #include "pc/dtls_srtp_transport.h"
 
+#include <api/array_view.h>
 #include <rtc_base/logging.h>
+#include <rtc_base/copy_on_write_buffer.h>
 
 #include "pc/dtls_transport.h"
+#include "module/rtp_rtcp/rtp_utils.h"
 
 namespace xrtc {
 
@@ -26,9 +29,29 @@ void DtlsSrtpTransport::set_dtls_transport(DtlsTransport* rtp_dtls_transport,
     if (_rtp_dtls_transport) {
         _rtp_dtls_transport->signal_dtls_state.connect(this,
                 &DtlsSrtpTransport::_on_dtls_state);
+        _rtp_dtls_transport->signal_read_packet.connect(this,
+                &DtlsSrtpTransport::_on_read_packet);
     }
 
     _maybe_setup_dtls_srtp();
+}
+
+void DtlsSrtpTransport::_on_read_packet(DtlsTransport* /*dtls*/,
+        const char* data, size_t len, int64_t ts)
+{
+    auto array_view = rtc::MakeArrayView(data, len);
+    RtpPacketType packet_type = infer_rtp_packet_type(array_view);
+
+    if (packet_type == RtpPacketType::k_unknown) {
+        return;
+    }
+
+    rtc::CopyOnWriteBuffer packet(data, len);
+    if (packet_type == RtpPacketType::k_rtcp) {
+        //_on_rtcp_packet_received(std::move(packet), ts);
+    } else {
+        //_on_rtp_packet_received(std::move(packet), ts);
+    }
 }
 
 // _on_dtls_state — DTLS 状态变化回调
