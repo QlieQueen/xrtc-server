@@ -94,8 +94,70 @@ bool SrtpSession::_set_key(int type, int cs, const uint8_t* key, size_t key_len,
         return false;
     }
 
+    return _do_set_key(type, cs, key, key_len, extension_ids);
+}
+
+// _do_set_key — 构造 srtp_policy_t 并创建/更新 libsrtp 会话上下文
+//
+// 填充流程:
+//   1. 从 crypto suite 编号自动填充 policy.rtp / policy.rtcp (密码器+认证函数+密钥长度)
+//   2. 校验 key 长度匹配密码套件要求的 cipher_key_len
+//   3. 设置 SSRC 方向 (ssrc_any_outbound 加密 / ssrc_any_inbound 解密)
+//   4. 首次调用 srtp_create 创建 _session, 后续调用 srtp_update 更新密钥
+//   5. 记录 auth_tag_len — 后续解密时需要确定 RTP/RTCP 包尾部的认证标签长度
+bool SrtpSession::_do_set_key(int type, int cs, const uint8_t* key,
+        size_t key_len, const std::vector<int>& /*extension_ids*/)
+{
+    srtp_policy_t policy;
+    memset(&policy, 0, sizeof(policy));
+
+    bool rtp_ret = srtp_crypto_policy_set_from_profile_for_rtp(
+            &policy.rtp, (srtp_profile_t)cs);
+    bool rtcp_ret = srtp_crypto_policy_set_from_profile_for_rtcp(
+            &policy.rtcp, (srtp_profile_t)cs);
+
+    if (rtp_ret != srtp_err_status_ok || rtcp_ret != srtp_err_status_ok) {
+        RTC_LOG(LS_WARNING) << "SRTP session " << (_session ? "create" : "update")
+            << " failed: unsupported crypto suite " << cs;
+        return false;
+    }
+
+    if (!key || key_len != (size_t)policy.rtp.cipher_key_len) {
+        RTC_LOG(LS_WARNING) << "SRTP session " << (_session ? "create" : "update")
+            << " failed: invalid key";
+        return false;
+    }
+
+    policy.ssrc.type = (srtp_ssrc_type_t)type;
+    policy.ssrc.value = 0;
+
+    policy.key = (uint8_t*)key;
+
+    policy.window_size = 1024;
+    policy.allow_repeat_tx = 1;
+    policy.next = nullptr;
+
+    if (!_session) {
+        int err = srtp_create(&_session, &policy);
+        if (err != srtp_err_status_ok) {
+            RTC_LOG(LS_WARNING) << "Failed to create srtp, err: " << err;
+            _session = nullptr;
+            return false;
+        }
+    } else {
+        int err = srtp_update(_session, &policy);
+        if (err != srtp_err_status_ok) {
+            RTC_LOG(LS_WARNING) << "Failed to update srtp, err: " << err;
+            return false;
+        }
+    }
+
+    _rtp_auth_tag_len = policy.rtp.auth_tag_len;
+    _rtcp_auth_tag_len = policy.rtcp.auth_tag_len;
+
     return true;
-}    
+}
+
 
 } // namespace xrtc
 

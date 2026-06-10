@@ -24,6 +24,8 @@ private:
     // 核心：为 type 方向（ssrc_any_outbound / ssrc_any_inbound）设置密码套件+密钥
     bool _set_key(int type, int cs, const uint8_t* key, size_t key_len,
         const std::vector<int>& extension_ids);
+    bool _do_set_key(int type, int cs, const uint8_t* key,
+        size_t key_len, const std::vector<int>& /*extension_ids*/);
     // 引用计数 + 懒初始化 libsrtp 全局状态（srtp_init 只能调用一次）
     static bool _increment_libsrtp_usage_count_and_maybe_init();
     // C 回调 thunk — srtp_install_event_handler 注册，从 ev->session 取 user_data 回 this
@@ -34,6 +36,8 @@ private:
 private:
     srtp_ctx_t* _session = nullptr;  // libsrtp 会话句柄，srtp_create 后赋值
     bool _inited = false;             // 本会话是否已通过 _set_key 初始化
+    int _rtp_auth_tag_len = 0;
+    int _rtcp_auth_tag_len = 0;
 };
 
 
