@@ -75,6 +75,8 @@ public:
     DtlsTransportState dtls_state() { return _dtls_state; } // PC 状态聚合用
     bool is_dtls_active() { return _dtls_active; }
 
+    bool writable() { return _writable; }
+
     // 返回 DTLS 握手协商的 SRTP 密码套件, 仅在 k_connected 状态下有效
     bool get_srtp_crypto_suite(int *selected_crypto_suite);
     // 从 DTLS 安全通道导出密钥材料 (RFC 5705 Keying Material Exporters)

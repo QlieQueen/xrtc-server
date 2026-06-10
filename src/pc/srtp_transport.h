@@ -3,6 +3,7 @@
 
 #include <memory>
 #include <vector>
+#include <rtc_base/third_party/sigslot/sigslot.h>
 
 #include "pc/srtp_session.h"
 
@@ -10,7 +11,7 @@ namespace xrtc {
 
 // SRTP 传输层基类 — 管理 send/recv 两个 SrtpSession，提供 protect/unprotect 接口
 // DtlsSrtpTransport 继承此类，包装 DtlsTransport 在 DTLS 握手之上加 SRTP 加解密
-class SrtpTransport {
+class SrtpTransport : public sigslot::has_slots<> {
 public:
     SrtpTransport(bool rtcp_mux_enabled);
     virtual ~SrtpTransport() = default;
@@ -25,10 +26,13 @@ public:
             const std::vector<int>& recv_extension_ids);
 
     void reset_params();
+
+    bool is_srtp_active();
+
 private:
     void _create_srtp_session();
 
-private:
+protected:
     bool _rtcp_mux_enabled;
     std::unique_ptr<SrtpSession> _send_session;
     std::unique_ptr<SrtpSession> _recv_session;

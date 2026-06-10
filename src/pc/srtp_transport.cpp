@@ -43,7 +43,7 @@ bool SrtpTransport::set_rtp_params(int send_cs,
 
     RTC_LOG(LS_INFO) << "SRTP " << (new_session ? "activated" : "updated")
         << " params: send crypto suite " << send_cs
-        << " recv crypto suite" << recv_cs;
+        << " recv crypto suite " << recv_cs;
 
     return true;
 }
@@ -52,6 +52,11 @@ void SrtpTransport::reset_params() {
     _send_session = nullptr;
     _recv_session = nullptr;
     RTC_LOG(LS_INFO) << "The params in SRTP reset";
+}
+
+// is_srtp_active — send 和 recv 两个 SrtpSession 都已创建即 SRTP 已安装
+bool SrtpTransport::is_srtp_active() {
+    return _recv_session && _send_session;
 }
 
 void SrtpTransport::_create_srtp_session() {
