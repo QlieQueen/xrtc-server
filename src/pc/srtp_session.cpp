@@ -21,6 +21,28 @@ bool SrtpSession::set_send(int cs, const uint8_t* key, size_t key_len,
     return _set_key(ssrc_any_outbound, cs, key, key_len, extension_ids);
 }
 
+// 更新发送密钥 (re-keying) — _update_key 要求 _session 已存在
+bool SrtpSession::update_send(int cs, const uint8_t* key, size_t key_len,
+        const std::vector<int>& extension_ids)
+{
+    return _update_key(ssrc_any_outbound, cs, key, key_len, extension_ids);
+}
+
+// 设置接收方向密钥（解密） — _set_key(ssrc_any_inbound, ...) 创建 recv session
+bool SrtpSession::set_recv(int cs, const uint8_t* key, size_t key_len,
+        const std::vector<int>& extension_ids)
+{
+    return _set_key(ssrc_any_inbound, cs, key, key_len, extension_ids);
+}
+
+// 更新接收密钥 (re-keying) — _update_key 要求 _session 已存在
+bool SrtpSession::update_recv(int cs, const uint8_t* key, size_t key_len,
+        const std::vector<int>& extension_ids)
+{
+    return _update_key(ssrc_any_inbound, cs, key, key_len, extension_ids);
+}
+
+
 // 全局引用计数 + 互斥锁 — 保证 srtp_init() 只被调用一次
 ABSL_CONST_INIT int g_libsrtp_usage_count = 0;
 ABSL_CONST_INIT webrtc::GlobalMutex g_libsrtp_lock(absl::kConstInit);
@@ -76,6 +98,20 @@ bool SrtpSession::_increment_libsrtp_usage_count_and_maybe_init() {
 
     g_libsrtp_usage_count++;
     return true;
+}
+
+// _update_key — update_send/update_recv 的共同实现
+// 与 _set_key 不同: 不检查 _inited/lib-srtp-init, 但要求 _session 已存在
+// _do_set_key 看到 _session 不为空 → 走 srtp_update 分支
+bool SrtpSession::_update_key(int type, int cs, const uint8_t* key, size_t key_len,
+        const std::vector<int>& extension_ids)
+{
+    if (!_session) {
+        RTC_LOG(LS_WARNING) << "Failed to update on non-exsiting SRTP session";
+        return false;
+    }
+
+    return _do_set_key(type, cs, key, key_len, extension_ids);
 }
 
 // 核心密钥设置 — 检查 session 是否已存在，然后触发 libsrtp 初始化
@@ -144,6 +180,7 @@ bool SrtpSession::_do_set_key(int type, int cs, const uint8_t* key,
             _session = nullptr;
             return false;
         }
+        srtp_set_user_data(_session, this);
     } else {
         int err = srtp_update(_session, &policy);
         if (err != srtp_err_status_ok) {

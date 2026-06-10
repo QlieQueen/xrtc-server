@@ -25,7 +25,6 @@ bool SrtpTransport::set_rtp_params(int send_cs,
         new_session = true;
     }
 
-    /*
     bool ret = new_session
         ? _send_session->set_send(send_cs, send_key, send_key_len, send_extension_ids)
         : _send_session->update_send(send_cs, send_key, send_key_len, send_extension_ids);
@@ -41,7 +40,6 @@ bool SrtpTransport::set_rtp_params(int send_cs,
         reset_params();
         return false;
     }
-    */
 
     RTC_LOG(LS_INFO) << "SRTP " << (new_session ? "activated" : "updated")
         << " params: send crypto suite " << send_cs

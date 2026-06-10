@@ -19,10 +19,18 @@ public:
     // 设置发送方向密钥（加密） — _set_key(ssrc_any_outbound, ...)
     bool set_send(int cs, const uint8_t* key, size_t key_len,
             const std::vector<int>& extension_ids);
+    bool update_send(int cs, const uint8_t* key, size_t key_len,
+            const std::vector<int>& extension_ids);
+    bool set_recv(int cs, const uint8_t* key, size_t key_len,
+            const std::vector<int>& extension_ids);
+    bool update_recv(int cs, const uint8_t* key, size_t key_len,
+            const std::vector<int>& extension_ids);
 
 private:
     // 核心：为 type 方向（ssrc_any_outbound / ssrc_any_inbound）设置密码套件+密钥
     bool _set_key(int type, int cs, const uint8_t* key, size_t key_len,
+        const std::vector<int>& extension_ids);
+    bool _update_key(int type, int cs, const uint8_t* key, size_t key_len,
         const std::vector<int>& extension_ids);
     bool _do_set_key(int type, int cs, const uint8_t* key,
         size_t key_len, const std::vector<int>& /*extension_ids*/);
