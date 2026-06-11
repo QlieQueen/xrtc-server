@@ -38,6 +38,10 @@ public:
 
 public:
     sigslot::signal2<PeerConnection*, PeerConnectionState> signal_connection_state;
+    sigslot::signal3<PeerConnection*, rtc::CopyOnWriteBuffer*, int64_t>
+        signal_rtp_packet_received;
+    sigslot::signal3<PeerConnection*, rtc::CopyOnWriteBuffer*, int64_t>
+        signal_rtcp_packet_received;
 
 private:
     // 延迟析构: 禁止外部直接 delete pc, 必须通过 destroy() → timer → delete pc
@@ -50,6 +54,10 @@ private:
             IceCandidateComponent component,
             const std::vector<Candidate>& candidates);
     void _on_connection_state(TransportController*, PeerConnectionState state);
+    void _on_rtp_packet_received(TransportController*,
+            rtc::CopyOnWriteBuffer* buffer, int64_t ts);
+    void _on_rtcp_packet_received(TransportController*,
+            rtc::CopyOnWriteBuffer* buffer, int64_t ts);
 
 private:
     EventLoop* _el;

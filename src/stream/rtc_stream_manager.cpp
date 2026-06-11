@@ -183,4 +183,12 @@ void RtcStreamManager::on_connection_state(RtcStream* stream,
     }
 }
 
+void RtcStreamManager::on_rtp_packet_received(RtcStream* stream, const char* data, size_t size) {
+
+}
+
+void RtcStreamManager::on_rtcp_packet_received(RtcStream* stream, const char* data, size_t size) {
+
+}
+
 } // namespace xrtc

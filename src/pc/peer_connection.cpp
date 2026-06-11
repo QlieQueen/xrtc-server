@@ -65,7 +65,23 @@ PeerConnection::~PeerConnection() {
 int PeerConnection::init(rtc::RTCCertificate* certificate) {
     _certificate = certificate;
     _transport_controller->set_local_certificate(certificate);
+    _transport_controller->signal_rtp_packet_received.connect(this,
+            &PeerConnection::_on_rtp_packet_received);
+    _transport_controller->signal_rtcp_packet_received.connect(this,
+            &PeerConnection::_on_rtcp_packet_received);
     return 0;
+}
+
+void PeerConnection::_on_rtp_packet_received(TransportController*,
+        rtc::CopyOnWriteBuffer* buffer, int64_t ts)
+{
+    signal_rtp_packet_received(this, buffer, ts);
+}
+
+void PeerConnection::_on_rtcp_packet_received(TransportController*,
+        rtc::CopyOnWriteBuffer* buffer, int64_t ts)
+{
+    signal_rtcp_packet_received(this, buffer, ts);
 }
 
 // 延迟析构回调: 在干净调用栈中 delete pc, 避免 re-entrant destruction

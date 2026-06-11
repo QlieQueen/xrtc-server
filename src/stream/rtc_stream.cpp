@@ -13,6 +13,8 @@ RtcStream::RtcStream(EventLoop* el, PortAllocator* allocator, uint64_t uid, cons
         _pc(new PeerConnection(_el, allocator))
 {
     _pc->signal_connection_state.connect(this, &RtcStream::_on_connection_state);
+    _pc->signal_rtp_packet_received.connect(this, &RtcStream::_on_rtp_packet_received);
+    _pc->signal_rtcp_packet_received.connect(this, &RtcStream::_on_rtcp_packet_received);
 }
 
 // 订阅 PC 状态信号, 打日志; commit 5 将在 k_failed 时触发资源清理
@@ -29,6 +31,22 @@ void RtcStream::_on_connection_state(PeerConnection*, PeerConnectionState state)
         _listener->on_connection_state(this, state);
     }
 
+}
+
+void RtcStream::_on_rtp_packet_received(PeerConnection*,
+    rtc::CopyOnWriteBuffer* packet, int64_t /*ts*/)
+{
+    if (_listener) {
+        _listener->on_rtp_packet_received(this, (const char*)packet->data(), packet->size());
+    }
+}
+
+void RtcStream::_on_rtcp_packet_received(PeerConnection*,
+    rtc::CopyOnWriteBuffer* packet, int64_t /*ts*/)
+{
+    if (_listener) {
+        _listener->on_rtcp_packet_received(this, (const char*)packet->data(), packet->size());
+    }
 }
 
 // 不直接 delete _pc: ~PeerConnection() 是 private 的, 必须走 destroy()

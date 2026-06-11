@@ -3,6 +3,7 @@
 
 #include <map>
 #include <rtc_base/third_party/sigslot/sigslot.h>
+#include <rtc_base/copy_on_write_buffer.h>
 
 #include "base/event_loop.h"
 #include "ice/ice_agent.h"
@@ -15,6 +16,7 @@ namespace xrtc {
 
 class DtlsTransport;
 enum class DtlsTransportState;
+class DtlsSrtpTransport;
 
 class TransportController : public sigslot::has_slots<> {
 public:
@@ -33,6 +35,11 @@ public:
     // PC 整体状态变化 → PeerConnection
     sigslot::signal2<TransportController*, PeerConnectionState> signal_connection_state;
 
+    sigslot::signal3<TransportController*, rtc::CopyOnWriteBuffer*, int64_t>
+        signal_rtp_packet_received;
+    sigslot::signal3<TransportController*, rtc::CopyOnWriteBuffer*, int64_t>
+        signal_rtcp_packet_received;
+
 private:
     void _on_candidate_allocator_done(IceAgent* agent,
             const std::string& transport_name,
@@ -42,6 +49,10 @@ private:
     void _on_dtls_receiving_state(DtlsTransport*);
     void _on_dtls_writable_state(DtlsTransport*);
     void _on_dtls_state(DtlsTransport*, DtlsTransportState);
+    void _on_rtp_packet_received(DtlsSrtpTransport*,
+            rtc::CopyOnWriteBuffer* packet, int64_t ts);
+    void _on_rtcp_packet_received(DtlsSrtpTransport*,
+            rtc::CopyOnWriteBuffer* packet, int64_t ts);
     void _update_state();
 
     void _add_dtls_transport(DtlsTransport* dtls_transport);
