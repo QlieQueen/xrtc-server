@@ -36,6 +36,9 @@ void DtlsSrtpTransport::set_dtls_transport(DtlsTransport* rtp_dtls_transport,
     _maybe_setup_dtls_srtp();
 }
 
+// _on_read_packet — DTLS 握手完成后接收 RTP/RTCP 数据
+// 1. infer_rtp_packet_type 解复用 → RTP / RTCP / unknown
+// 2. 调试日志输出包类型 + 长度 (解密 + 上层转发在后续 commit 实现)
 void DtlsSrtpTransport::_on_read_packet(DtlsTransport* /*dtls*/,
         const char* data, size_t len, int64_t ts)
 {
@@ -49,8 +52,10 @@ void DtlsSrtpTransport::_on_read_packet(DtlsTransport* /*dtls*/,
     rtc::CopyOnWriteBuffer packet(data, len);
     if (packet_type == RtpPacketType::k_rtcp) {
         //_on_rtcp_packet_received(std::move(packet), ts);
+        RTC_LOG(LS_WARNING) << "==================rtcp packet received: " << len;
     } else {
         //_on_rtp_packet_received(std::move(packet), ts);
+        RTC_LOG(LS_WARNING) << "==================rtp packet received: " << len;
     }
 }
 

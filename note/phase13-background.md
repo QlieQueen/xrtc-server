@@ -113,16 +113,81 @@ class SrtpSession {
 
 libsrtp 初始化是引用计数的——第一个 SrtpSession 创建时 `srtp_init()`，最后一个销毁时 `srtp_shutdown()`。
 
-## 5. RTP/RTCP 解复用
+## 5. RTP/RTCP 包格式与解复用
+
+### 5.1 RTP 包头（RFC 3550 Section 5.1）
 
 ```
-byte 0: [2bit version | ...]
-byte 1: [7bit payload type | ...]
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|V=2|P|X|  CC   |M|     PT      |       sequence number         |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                           timestamp                           |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|           synchronization source (SSRC) identifier            |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|            contributing source (CSRC) identifiers             |
+|                             ....                              |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                         payload ...                           |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 ```
 
-- version == 2 + PT ∈ [64, 96) → RTCP
-- version == 2 + PT ∉ [64, 96) → RTP
-- version != 2 → 未知
+- **Byte 0, bits 6-7**: Version (V) = 2
+- **Byte 0, bit 5**: Padding (P) — 1 表示尾部有填充
+- **Byte 0, bit 4**: Extension (X) — 1 表示有扩展头
+- **Byte 0, bits 0-3**: CSRC Count (CC)
+- **Byte 1, bit 7**: Marker (M) — 帧边界标记
+- **Byte 1, bits 0-6**: Payload Type (PT) — RTP 负载类型，动态范围 96~127
+- **Byte 2-3**: Sequence Number
+- **Byte 4-7**: Timestamp
+- **Byte 8-11**: SSRC
+- **最小长度**: 12 字节（固定头）
+
+### 5.2 RTCP 包头（RFC 3550 Section 6.1）
+
+```
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|V=2|P|    RC   |   PT          |             length            |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                         packet-specific data                  |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+```
+
+- **Byte 0, bits 6-7**: Version (V) = 2
+- **Byte 0, bit 5**: Padding (P)
+- **Byte 0, bits 0-4**: Reception Report Count (RC)
+- **Byte 1 (full 8 bits)**: Payload Type (PT) — RTCP 包类型
+  - SR = 200 (Sender Report)
+  - RR = 201 (Receiver Report)
+  - SDES = 202
+  - BYE = 203
+  - APP = 204
+- **Byte 2-3**: Length (以 4 字节为单位，不含自身)
+- **最小长度**: 4 字节
+
+### 5.3 RTP vs RTCP 区分规则（RFC 5761 Section 4）
+
+RTP 和 RTCP 复用同一 UDP 端口时，靠 PT 字段的低 7 位区分：
+
+```
+RTCP PT (完整 8 bit) = 192 ~ 223
+RTCP PT (低 7 bit)   = 192 & 0x7F ~ 223 & 0x7F = 64 ~ 95
+
+RTP PT (低 7 bit)    = 96 ~ 127
+```
+
+判断逻辑:
+
+```
+1. 长度 >= 12 或 >= 4
+2. Byte 0 >> 6 == 2（version bits）
+3. (Byte 1 & 0x7F) ∈ [64, 96) → RTCP
+   (Byte 1 & 0x7F) ∉ [64, 96) → RTP
+```
 
 ## 6. 和 Phase 10/11 的关系
 
