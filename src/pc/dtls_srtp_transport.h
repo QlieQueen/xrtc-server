@@ -32,18 +32,21 @@ private:
     void _on_read_packet(DtlsTransport* dtls,
             const char* data, size_t len, int64_t ts);
     void _on_rtp_packet_received(rtc::CopyOnWriteBuffer packet, int64_t ts);
+    void _on_rtcp_packet_received(rtc::CopyOnWriteBuffer packet, int64_t ts);
     void _maybe_setup_dtls_srtp();
     void _setup_dtls_srtp();
 
 public:
     sigslot::signal3<DtlsSrtpTransport*, rtc::CopyOnWriteBuffer*, int64_t>
         signal_rtp_packet_received;
+    sigslot::signal3<DtlsSrtpTransport*, rtc::CopyOnWriteBuffer*, int64_t>
+        signal_rtcp_packet_received;
 
 private:
     std::string _transport_name;
     DtlsTransport* _rtp_dtls_transport = nullptr;
     DtlsTransport* _rtcp_dtls_transport = nullptr;
-    uint32_t _unprotect_failed_count = 0;
+    uint32_t _unprotect_fail_count = 0;
 };
 
 } // namespace xrtc

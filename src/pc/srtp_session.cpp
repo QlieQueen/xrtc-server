@@ -52,6 +52,15 @@ bool SrtpSession::unprotect_rtp(void* p, int in_len, int* out_len) {
     return srtp_err_status_ok == srtp_unprotect(_session, p, out_len);
 }
 
+// unprotect_rtcp — 原地解密 RTCP 包 (libsrtp: srtp_unprotect_rtcp)
+bool SrtpSession::unprotect_rtcp(void* p, int in_len, int* out_len) {
+    if (!_session) {
+        return false;
+    }
+    *out_len = in_len;
+    return srtp_err_status_ok == srtp_unprotect_rtcp(_session, p, out_len);
+}
+
 // 全局引用计数 + 互斥锁 — 保证 srtp_init() 只被调用一次
 ABSL_CONST_INIT int g_libsrtp_usage_count = 0;
 ABSL_CONST_INIT webrtc::GlobalMutex g_libsrtp_lock(absl::kConstInit);

@@ -6,8 +6,8 @@ namespace xrtc {
 
 // RTP/RTCP 包头常量 (RFC 3550)
 const uint8_t k_rtp_version = 2;
-const size_t k_min_rtp_packet_size = 12;   // RTP 固定头 12 字节
-const size_t k_min_rtcp_packet_size = 4;   // RTCP 最小 4 字节
+const size_t k_min_rtp_packet_len = 12;   // RTP 固定头 12 字节
+const size_t k_min_rtcp_packet_len = 4;   // RTCP 最小 4 字节
 
 // 检查 RTP 版本号 — byte 0 的高 2 位必须 == 2
 bool has_correct_rtp_version(rtc::ArrayView<const uint8_t> packet) {
@@ -21,14 +21,14 @@ bool payload_type_is_reserved_for_rtcp(uint8_t payload_type) {
 
 // RTP 判断: 长度 >= 12 + version == 2 + PT 不在 64~95 范围
 bool is_rtp_packet(rtc::ArrayView<const uint8_t> packet) {
-    return packet.size() >= k_min_rtp_packet_size &&
+    return packet.size() >= k_min_rtp_packet_len &&
         has_correct_rtp_version(packet) &&
         !payload_type_is_reserved_for_rtcp(packet[1] & 0x7F);
 }
 
 // RTCP 判断: 长度 >= 4 + PT 在 64~95 范围
 bool is_rtcp_packet(rtc::ArrayView<const uint8_t> packet) {
-    return packet.size() >= k_min_rtcp_packet_size &&
+    return packet.size() >= k_min_rtcp_packet_len &&
         payload_type_is_reserved_for_rtcp(packet[1] & 0x7F);
 }
 
@@ -53,6 +53,21 @@ uint16_t parse_rtp_sequence_number(const rtc::ArrayView<const uint8_t>& packet) 
 // 读取 RTP header 的 SSRC — 大端序，位于 byte 8-11
 uint32_t parse_rtp_ssrc(const rtc::ArrayView<const uint8_t>& packet) {
     return rtc::ByteReader<uint32_t>::ReadBigEndian(packet.data() + 8);
+}
+
+// 读取 RTCP header 的 Payload Type — 完整 8 bit，位于 byte 1
+bool get_rtcp_type(const void* data, size_t len, int* type) {
+    if (len < k_min_rtcp_packet_len) {
+        return false;
+    }
+
+    if (!data || !type) {
+        return false;
+    }
+
+    *type = *((const uint8_t*)data + 1);
+
+    return true;
 }
 
 } // namespace xrtc

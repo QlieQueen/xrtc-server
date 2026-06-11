@@ -50,8 +50,7 @@ void DtlsSrtpTransport::_on_read_packet(DtlsTransport* /*dtls*/,
 
     rtc::CopyOnWriteBuffer packet(data, len);
     if (packet_type == RtpPacketType::k_rtcp) {
-        //_on_rtcp_packet_received(std::move(packet), ts);
-        RTC_LOG(LS_WARNING) << "==================rtcp packet received: " << len;
+        _on_rtcp_packet_received(std::move(packet), ts);
     } else {
         _on_rtp_packet_received(std::move(packet), ts);
     }
@@ -75,18 +74,44 @@ void DtlsSrtpTransport::_on_rtp_packet_received(rtc::CopyOnWriteBuffer packet, i
         const int k_failed_log = 100;
         auto packet_array = 
             rtc::MakeArrayView(reinterpret_cast<const uint8_t*>(data), packet.size());
-        if (_unprotect_failed_count % 100 == 0) {
+        if (_unprotect_fail_count % 100 == 0) {
             RTC_LOG(LS_WARNING) << "Failed to unprotect rtp packet: "
                 << ", size=" << len
                 << ", seqence number=" << parse_rtp_sequence_number(packet_array)
-                << ", ssrc=" << parse_rtp_ssrc(packet_array);
+                << ", ssrc=" << parse_rtp_ssrc(packet_array)
+                << ", unprotect_failed_count=" << _unprotect_fail_count;
         }
-        _unprotect_failed_count++;
+        _unprotect_fail_count++;
         return;
     }
 
     packet.SetSize(len);
     signal_rtp_packet_received(this, &packet, ts);
+}
+
+// _on_rtcp_packet_received — RTCP 包解密 + 发射到上层, 与 _on_rtp_packet_received 镜像
+void DtlsSrtpTransport::_on_rtcp_packet_received(rtc::CopyOnWriteBuffer packet, int64_t ts) {
+    if (!is_srtp_active()) {
+        RTC_LOG(LS_WARNING) << "Inactive SRTP transport received a packet, drop it.";
+        return;
+    }
+
+    char* data = packet.data<char>();
+    int len = packet.size();
+
+    if (!unprotect_rtcp(data, len, &len)) {
+        int type = 0;
+        get_rtcp_type(data, len, &type);
+        auto packet_array = 
+        rtc::MakeArrayView(reinterpret_cast<const uint8_t*>(data), packet.size());
+        RTC_LOG(LS_WARNING) << "Failed to unprotect rtcp packet: "
+            << ", size=" << len
+            << ", type=" << type;
+        return;
+    }
+
+    packet.SetSize(len);
+    signal_rtcp_packet_received(this, &packet, ts);
 }
 
 // _on_dtls_state — DTLS 状态变化回调

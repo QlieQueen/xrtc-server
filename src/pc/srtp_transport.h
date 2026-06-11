@@ -30,6 +30,7 @@ public:
     bool is_srtp_active();
 
     bool unprotect_rtp(void* p, int in_len, int* out_len);
+    bool unprotect_rtcp(void* p, int in_len, int* out_len);
 
 private:
     void _create_srtp_session();
