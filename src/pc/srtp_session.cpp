@@ -42,6 +42,15 @@ bool SrtpSession::update_recv(int cs, const uint8_t* key, size_t key_len,
     return _update_key(ssrc_any_inbound, cs, key, key_len, extension_ids);
 }
 
+// unprotect_rtp — 原地解密 RTP 包 (libsrtp: srtp_unprotect)
+// *out_len 返回解密后的实际长度 (= in_len - auth_tag_len)
+bool SrtpSession::unprotect_rtp(void* p, int in_len, int* out_len) {
+    if (!_session) {
+        return false;
+    }
+    *out_len = in_len;
+    return srtp_err_status_ok == srtp_unprotect(_session, p, out_len);
+}
 
 // 全局引用计数 + 互斥锁 — 保证 srtp_init() 只被调用一次
 ABSL_CONST_INIT int g_libsrtp_usage_count = 0;

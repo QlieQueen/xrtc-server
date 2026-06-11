@@ -1,5 +1,7 @@
 #include "module/rtp_rtcp/rtp_utils.h"
 
+#include <rtc_base/byte_io.h>
+
 namespace xrtc {
 
 // RTP/RTCP 包头常量 (RFC 3550)
@@ -41,6 +43,16 @@ RtpPacketType infer_rtp_packet_type(rtc::ArrayView<const char> packet) {
     }
 
     return RtpPacketType::k_unknown;
+}
+
+// 读取 RTP header 的 sequence number — 大端序，位于 byte 2-3
+uint16_t parse_rtp_sequence_number(const rtc::ArrayView<const uint8_t>& packet) {
+    return rtc::ByteReader<uint16_t>::ReadBigEndian(packet.data() + 2);
+}
+
+// 读取 RTP header 的 SSRC — 大端序，位于 byte 8-11
+uint32_t parse_rtp_ssrc(const rtc::ArrayView<const uint8_t>& packet) {
+    return rtc::ByteReader<uint32_t>::ReadBigEndian(packet.data() + 8);
 }
 
 } // namespace xrtc

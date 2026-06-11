@@ -59,6 +59,15 @@ bool SrtpTransport::is_srtp_active() {
     return _recv_session && _send_session;
 }
 
+// unprotect_rtp — 代理到 _recv_session 解密 RTP
+// 调用前提: SRTP 已激活 (send + recv session 都已创建)
+bool SrtpTransport::unprotect_rtp(void* p, int in_len, int* out_len) {
+    if (!is_srtp_active()) {
+        return false;
+    }
+    return _recv_session->unprotect_rtp(p, in_len, out_len);
+}
+
 void SrtpTransport::_create_srtp_session() {
     _send_session.reset(new SrtpSession());
     _recv_session.reset(new SrtpSession());

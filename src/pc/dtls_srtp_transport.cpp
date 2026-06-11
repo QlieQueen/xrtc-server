@@ -2,7 +2,6 @@
 
 #include <api/array_view.h>
 #include <rtc_base/logging.h>
-#include <rtc_base/copy_on_write_buffer.h>
 
 #include "pc/dtls_transport.h"
 #include "module/rtp_rtcp/rtp_utils.h"
@@ -54,9 +53,40 @@ void DtlsSrtpTransport::_on_read_packet(DtlsTransport* /*dtls*/,
         //_on_rtcp_packet_received(std::move(packet), ts);
         RTC_LOG(LS_WARNING) << "==================rtcp packet received: " << len;
     } else {
-        //_on_rtp_packet_received(std::move(packet), ts);
-        RTC_LOG(LS_WARNING) << "==================rtp packet received: " << len;
+        _on_rtp_packet_received(std::move(packet), ts);
     }
+}
+
+// _on_rtp_packet_received — RTP 包解密 + 发射到上层
+// 1. SRTP 未激活 → 丢弃
+// 2. srtp_unprotect 原地解密 (buffer 不变, 尾部 auth tag 被截掉)
+// 3. 解密失败 → 每 100 次打一次日志 (含 seqnum + ssrc), 丢弃
+// 4. 解密成功 → signal_rtp_packet_received 发射明文 RTP
+void DtlsSrtpTransport::_on_rtp_packet_received(rtc::CopyOnWriteBuffer packet, int64_t ts) {
+    if (!is_srtp_active()) {
+        RTC_LOG(LS_WARNING) << "Inactive SRTP transport received a packet, drop it.";
+        return;
+    }
+
+    char* data = packet.data<char>();
+    int len = packet.size();
+
+    if (!unprotect_rtp(data, len, &len)) {
+        const int k_failed_log = 100;
+        auto packet_array = 
+            rtc::MakeArrayView(reinterpret_cast<const uint8_t*>(data), packet.size());
+        if (_unprotect_failed_count % 100 == 0) {
+            RTC_LOG(LS_WARNING) << "Failed to unprotect rtp packet: "
+                << ", size=" << len
+                << ", seqence number=" << parse_rtp_sequence_number(packet_array)
+                << ", ssrc=" << parse_rtp_ssrc(packet_array);
+        }
+        _unprotect_failed_count++;
+        return;
+    }
+
+    packet.SetSize(len);
+    signal_rtp_packet_received(this, &packet, ts);
 }
 
 // _on_dtls_state — DTLS 状态变化回调
