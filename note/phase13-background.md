@@ -211,10 +211,125 @@ Phase 10 完成了 `DtlsTransport`（DTLS 握手）。Phase 13 在 DTLS 之上�
 | `pc/transport_controller.h/.cpp` | 创建 DtlsSrtpTransport、send_rtp/send_rtcp |
 | `module/rtp_rtcp/rtp_utils.h/.cpp` | RTP/RTCP 解复用 |
 
-## 8. 关键注意点
+## 8. Q&A：关键概念辨析
+
+### Q1：DTLS 证书 vs SRTP 加解密密钥是什么关系？
+
+| | DTLS 证书 | SRTP 密钥 |
+|---|---|---|
+| **用途** | DTLS 握手时的身份认证 | 握手完成后 RTP/RTCP 加解密 |
+| **来源** | 服务端自己生成（`RTCCertificate`） | 从 DTLS 握手的主密钥**导出** |
+| **生命周期** | 服务启动时生成，可复用多个连接 | 每次 DTLS 握手完成后重新导出 |
+| **存储位置** | `DtlsTransport::_local_certificate` | `SrtpSession::_session` (srtp_ctx_t) |
+
+**两者完全独立**。DTLS 握手期间用证书做身份认证，握手完毕后通过 `SSL_export_keying_material` 从 DTLS master secret 导出 SRTP 加解密密钥。
+
+### Q2：握手完成后如何协商密码套件并导出密钥？
+
+```
+DTLS 握手 (ClientHello/ServerHello/...)
+  ↓  期间 use_srtp 扩展协商密码套件 (SRTP_AES128_CM_SHA1_80 等)
+  ↓
+握手完成 → k_connected
+  ↓
+SSL_export_keying_material("EXTRACTOR-dtls_srtp", ...)
+  ↓  从 DTLS master secret 导出一块密钥材料
+  ↓
+拆分: [client_write_key | server_write_key | client_write_salt | server_write_salt]
+  ↓
+server_write_key → send_key (服务端加密用)
+client_write_key → recv_key (服务端解密用)
+```
+
+密码套件（如 `SRTP_AES128_CM_SHA1_80`）决定 key 长度、salt 长度、auth tag 长度，这些信息被填入 `srtp_policy_t` 再传给 `srtp_create`。
+
+### Q3：加密和解密用的是同一把密钥吗？
+
+**不是。** `SSL_export_keying_material` 导出的材料被切成 4 段：
+
+```
+┌──────────────────┬──────────────────┬───────────────────┬───────────────────┐
+│ client_write_key │ server_write_key │ client_write_salt │ server_write_salt │
+└──────────────────┴──────────────────┴───────────────────┴───────────────────┘
+```
+
+- **服务端**：`send_key` = server_write（加密发出），`recv_key` = client_write（解密收到）
+- **客户端**：加密用 client_write = 服务端的 recv_key，解密用 server_write = 服务端的 send_key
+
+即：
+- 服务端加密密钥 ≠ 服务端解密密钥（不同的 key）
+- 服务端加密密钥 == 客户端解密密钥（都是 `server_write_key`）
+
+`srtp_policy_t.ssrc.type` 强制隔离方向：
+- `ssrc_any_outbound` — 只允许 `srtp_protect`（加密）
+- `ssrc_any_inbound` — 只允许 `srtp_unprotect`（解密）
+
+一个 `SrtpSession` 只能做加密或解密，不能混用。
+
+### Q4：srtp_policy_t 各字段含义
+
+| 字段 | 含义 | 我们填的值 |
+|------|------|-----------|
+| `ssrc.type` | 匹配方向 | send=ssrc_any_outbound, recv=ssrc_any_inbound |
+| `ssrc.value` | 具体 SSRC 值 | 0 (wildcard，匹配该方向所有 SSRC) |
+| `rtp` | RTP 密码套件 | srtp_crypto_policy_set_from_profile_for_rtp(&policy.rtp, cs) |
+| `rtcp` | RTCP 密码套件 | srtp_crypto_policy_set_from_profile_for_rtcp(&policy.rtcp, cs) |
+| `key` | 主密钥指针 | 指向 _extract_params 导出的 key buffer |
+| `window_size` | 防重放窗口 | 1024 |
+| `allow_repeat_tx` | 允许重传 | 1 |
+| `next` | 多 SSRC 链表 | nullptr |
+
+### Q5：SRTP 加密后的包结构 & auth_tag_len 用途
+
+```
+明文 RTP:   [RTP Header 12B] [Payload N 字节]
+加密 SRTP:  [RTP Header 12B] [Encrypted Payload N 字节] [Auth Tag 10B]
+                                                       ↑ _rtp_auth_tag_len
+```
+
+`srtp_unprotect` 原地解密后 `*out_len` = 原始长度 - auth_tag_len。调用方用 `packet.SetSize(len)` 截掉尾部的 auth tag。auth_tag_len 取决于密码套件（如 `SRTP_AES128_CM_SHA1_80` 的 RTP auth_tag = 10 字节）。
+
+### Q6：set_dtls_transport 为什么要立刻调 _maybe_setup_dtls_srtp？
+
+两种时序，先到的赢：
+
+```
+时序 A（正常）：set_dtls_transport → ...→ DTLS 握手完成 → 信号触发 → 安装 SRTP
+时序 B（极端）：DTLS 握手完成 → set_dtls_transport → 信号已发过 → 需要立刻安装
+```
+
+`_maybe_setup_dtls_srtp` 内部做双重检查（`is_srtp_active() || !is_dtls_writable()`），大部分情况下是空操作直接 return。这是"信号驱动 + 手动兜底"的常见模式。
+
+### Q8：unprotect 后数据在哪？—— SRTP 是原地操作
+
+`srtp_unprotect(void* p, in_len, &out_len)` 直接修改传入的 buffer，不分配新内存。解密后 buffer 内容被原地替换，out_len 变短（减掉 auth tag），buffer 尾部剩余的是 auth tag 垃圾，调用方用 `packet.SetSize(out_len)` 截掉。
+
+## 9. 信号全链路
+
+Phase 13 完成的完整信号传递链：
+
+```
+UDP 加密包
+  → IceTransportChannel
+    → DtlsTransport::signal_read_packet
+      → DtlsSrtpTransport::_on_read_packet          (解复用 RTP/RTCP)
+        → DtlsSrtpTransport::_on_rtp/rtcp_packet_received  (解密 + 发射)
+          → signal_rtp/rtcp_packet_received
+            → TransportController                    (转发)
+              → signal_rtp/rtcp_packet_received
+                → PeerConnection                     (转发)
+                  → signal_rtp/rtcp_packet_received
+                    → RtcStream                      (调用 listener)
+                      → RtcStreamManager             (空实现，Phase 14 填转发逻辑)
+```
+
+## 10. 关键注意点
 
 1. **DTLS 不加密媒体数据**——握手后媒体走 SRTP 直接在 UDP 上传输
 2. **DtlsSrtpTransport 不继承 DtlsTransport**——它持有 DtlsTransport 指针，订阅其信号
 3. **服务器是 DTLS server role**——`send_key = server_write`、`recv_key = client_write`
 4. **rtcp-mux 时不需要 RTCP 独立 DTLS 通道**——`_rtcp_dtls_transport = nullptr`
 5. **SRTP 解保后包变小**——auth tag 被去除，in_len > out_len
+6. **unprotect 是原地操作**——buffer 不重新分配，`SetSize(out_len)` 截掉尾部 auth tag
+7. **get_rtcp_type 读完整 8 bit PT**——不要用 `& 0x7F` 掩码，需要区分 SR(200)/RR(201) 等
+8. **ssrc_any_inbound 用于解密、ssrc_any_outbound 用于加密**——一个 session 只能做一种操作
