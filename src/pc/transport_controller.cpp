@@ -190,6 +190,25 @@ DtlsTransport* TransportController::_get_dtls_transport(const std::string& trans
     return nullptr;
 }
 
+void TransportController::_add_dtls_srtp_transport(DtlsSrtpTransport* dtls_srtp_transport) {
+    std::string name = dtls_srtp_transport->transport_name();
+    auto iter = _dtls_srtp_transport_by_name.find(name);
+    if (iter != _dtls_srtp_transport_by_name.end()) {
+        delete iter->second;
+        iter->second = dtls_srtp_transport;
+    } else {
+        _dtls_srtp_transport_by_name[name] = dtls_srtp_transport;
+    }
+}
+
+DtlsSrtpTransport* TransportController::_get_dtls_srtp_transport(const std::string& transport_name) {
+    auto iter = _dtls_srtp_transport_by_name.find(transport_name);
+    if (iter != _dtls_srtp_transport_by_name.end()) {
+        return iter->second;
+    }
+
+    return nullptr;
+}
 
 int TransportController::set_remote_description(SessionDescription* remote_desc) {
     if (!remote_desc) {
@@ -222,6 +241,16 @@ int TransportController::set_remote_description(SessionDescription* remote_desc)
 
 void TransportController::set_local_certificate(rtc::RTCCertificate* cert) {
     _local_certificate = cert;
+}
+
+int TransportController::send_rtp(const std::string& transport_name, const char* data, size_t len) {
+    int ret = -1;
+    auto dtls_srtp = _get_dtls_srtp_transport(transport_name);
+    if (dtls_srtp) {
+        ret = dtls_srtp->send_rtp(data, len);
+    }
+
+    return ret;
 }
 
 // 继续向上转发

@@ -22,6 +22,9 @@ public:
     void set_dtls_transport(DtlsTransport* rtp_dtls_transport,
             DtlsTransport* rtcp_dtls_transport);
     bool is_dtls_writable();
+    const std::string& transport_name() { _transport_name; }
+
+    int send_rtp(const char* data, size_t len);
 
 private:
     bool _extract_params(DtlsTransport* dtls_transport, 

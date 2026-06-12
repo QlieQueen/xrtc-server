@@ -36,6 +36,8 @@ public:
         _video_source = source;
     }
 
+    int send_rtp(const char* data, size_t len);
+
 public:
     sigslot::signal2<PeerConnection*, PeerConnectionState> signal_connection_state;
     sigslot::signal3<PeerConnection*, rtc::CopyOnWriteBuffer*, int64_t>

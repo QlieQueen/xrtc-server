@@ -64,6 +64,9 @@ int RtcStream::set_remote_sdp(const std::string& sdp) {
     return _pc->set_remote_sdp(sdp);
 }
 
+int RtcStream::send_rtp(const char* data, size_t len) {
+    return _pc ? _pc->send_rtp(data, len) : -1;
+}
 
 std::string RtcStream::to_string() {
     std::stringstream ss;
