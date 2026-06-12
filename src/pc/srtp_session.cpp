@@ -58,7 +58,34 @@ bool SrtpSession::unprotect_rtcp(void* p, int in_len, int* out_len) {
         return false;
     }
     *out_len = in_len;
-    return srtp_err_status_ok == srtp_unprotect_rtcp(_session, p, out_len);
+
+    int err = srtp_unprotect_rtcp(_session, p, out_len);
+    if (err != srtp_err_status_ok) {
+        RTC_LOG(LS_WARNING) << "Failed to protect rtp packet, err=" << err;
+        return false;
+    }
+
+    return true;
+}
+
+// protect_rtp — 原地加密 RTP 包 (libsrtp: srtp_protect)
+// in_len=明文长度, max_len=buffer容量, *out_len=加密后长度(=in_len+auth_tag_len)
+// 要求 max_len >= in_len + _rtp_auth_tag_len, 否则加密失败
+bool SrtpSession::protect_rtp(void*p, int in_len, int max_len, int* out_len) {
+    if (!_session) {
+        RTC_LOG(LS_WARNING) << "Failed to protect rtp packet: no SRTP session";
+        return false;
+    }
+
+    int need_len = in_len + _rtp_auth_tag_len;
+    if (max_len < need_len) {
+        RTC_LOG(LS_WARNING) << "Failed to protect rtp packet: The buffer length "
+            << max_len << " is less than needed " << need_len;
+        return false;      
+    }
+
+    *out_len = in_len;
+    return srtp_err_status_ok == srtp_protect(_session, p, out_len);
 }
 
 void SrtpSession::get_auth_tag_len(int* rtp_auth_tag_len, int* rtcp_auth_tag_len) {

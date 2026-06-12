@@ -87,6 +87,8 @@ public:
             uint8_t* result,
             size_t result_len);
 
+    int send_packet(const char* data, size_t len);
+
     std::string to_string();
 
 public:

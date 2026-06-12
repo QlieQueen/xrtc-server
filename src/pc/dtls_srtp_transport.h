@@ -22,7 +22,7 @@ public:
     void set_dtls_transport(DtlsTransport* rtp_dtls_transport,
             DtlsTransport* rtcp_dtls_transport);
     bool is_dtls_writable();
-    const std::string& transport_name() { _transport_name; }
+    const std::string& transport_name() { return _transport_name; }
 
     int send_rtp(const char* data, size_t len);
 
@@ -50,6 +50,7 @@ private:
     DtlsTransport* _rtp_dtls_transport = nullptr;
     DtlsTransport* _rtcp_dtls_transport = nullptr;
     uint32_t _unprotect_fail_count = 0;
+    uint16_t _last_send_seq_num = 0;
 };
 
 } // namespace xrtc

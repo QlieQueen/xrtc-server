@@ -68,6 +68,7 @@ int TransportController::set_local_description(SessionDescription* desc) {
                 &TransportController::_on_rtp_packet_received);
         dtls_srtp->signal_rtcp_packet_received.connect(this,
                 &TransportController::_on_rtcp_packet_received);
+        _add_dtls_srtp_transport(dtls_srtp);
     }
     
     _ice_agent->gathering_candidate();

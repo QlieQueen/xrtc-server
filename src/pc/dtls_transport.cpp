@@ -549,6 +549,15 @@ bool DtlsTransport::export_keying_material(const std::string& label,
         context_len, use_context, result, result_len) : false;
 }
 
+// send_packet — 直接经 ICE channel 发送 UDP 数据 (不经过 DTLS 加密)
+// 仅用于 DTLS 握手完成后发送 SRTP 加密后的 RTP/RTCP 包
+int DtlsTransport::send_packet(const char* data, size_t len) {
+    if (_channel) {
+        return _channel->send_packet(data, len);
+    }
+    return -1;
+}
+
 std::string DtlsTransport::to_string() {
     std::stringstream ss;
     absl::string_view RECEIVING[2] = {"-", "R"};

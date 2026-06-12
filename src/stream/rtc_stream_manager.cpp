@@ -188,6 +188,8 @@ void RtcStreamManager::on_rtp_packet_received(RtcStream* stream, const char* dat
         PullStream* pull_stream = _find_pull_stream(stream->get_stream_name());
         if (pull_stream) {
             pull_stream->send_rtp(data, len);
+        } else {
+            RTC_LOG(LS_WARNING) << "No pull stream found for stream " << stream->get_stream_name();
         }
     }
 }

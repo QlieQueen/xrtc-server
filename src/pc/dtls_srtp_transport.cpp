@@ -35,6 +35,10 @@ void DtlsSrtpTransport::set_dtls_transport(DtlsTransport* rtp_dtls_transport,
     _maybe_setup_dtls_srtp();
 }
 
+// send_rtp — RTP 加密发送路径 (接收解密的反向)
+// 1. 从 _send_session 获取 auth_tag_len, 分配加密 buffer (预留 auth tag 空间)
+// 2. protect_rtp 原地加密 → encrypt payload + 追加 auth tag
+// 3. 加密后经 DtlsTransport::send_packet → ICE channel → UDP 发出
 int DtlsSrtpTransport::send_rtp(const char* data, size_t len) {
     if (!is_srtp_active()) {
         RTC_LOG(LS_WARNING) << "Failed to send rtp packet: Inactive srtp transport";
@@ -43,27 +47,25 @@ int DtlsSrtpTransport::send_rtp(const char* data, size_t len) {
 
     int rtp_auth_tag_len = 0;
     get_send_auth_tag_len(&rtp_auth_tag_len, nullptr);
-    rtc::CopyOnWriteBuffer packet(data, len + rtp_auth_tag_len);
+    rtc::CopyOnWriteBuffer packet(data, len, len + rtp_auth_tag_len);
 
     char* buf = (char*)packet.data();
     int size = packet.size();
+
     uint16_t seq_num = parse_rtp_sequence_number(packet);
-    /*
-    if (!protect_rtp(buf, size, packet.capacity(), &len)) {
+    if (!protect_rtp(buf, size, packet.capacity(), &size)) {
         RTC_LOG(LS_WARNING) << "Failed to protect rtp packet, size=" << size
             << ", seqnum=" << seq_num
             << ", ssrc=" << parse_rtp_ssrc(packet)
             << ", last_send_seq_num=" << _last_send_seq_num;
+        return -1;
     }
 
     _last_send_seq_num = seq_num;
 
-    packet.SetSize(len);
+    packet.SetSize(size);
 
-    return _rtp_dtls_transport->send_packet(packet.cdata(), packet.size());
-    */
-
-    return -1;
+    return _rtp_dtls_transport->send_packet((const char*)packet.cdata(), packet.size());
 }
 
 // _on_read_packet — DTLS 握手完成后接收 RTP/RTCP 数据
