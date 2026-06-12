@@ -61,6 +61,22 @@ bool SrtpSession::unprotect_rtcp(void* p, int in_len, int* out_len) {
     return srtp_err_status_ok == srtp_unprotect_rtcp(_session, p, out_len);
 }
 
+void SrtpSession::get_auth_tag_len(int* rtp_auth_tag_len, int* rtcp_auth_tag_len) {
+    if (!_session) {
+        return;
+    }
+
+    if (rtp_auth_tag_len) {
+        *rtp_auth_tag_len = _rtp_auth_tag_len;
+    }
+
+    if (rtcp_auth_tag_len) {
+        *rtcp_auth_tag_len = _rtcp_auth_tag_len;
+    }
+
+    return;
+}
+
 // 全局引用计数 + 互斥锁 — 保证 srtp_init() 只被调用一次
 ABSL_CONST_INIT int g_libsrtp_usage_count = 0;
 ABSL_CONST_INIT webrtc::GlobalMutex g_libsrtp_lock(absl::kConstInit);

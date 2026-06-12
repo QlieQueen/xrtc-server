@@ -36,6 +36,33 @@ void DtlsSrtpTransport::set_dtls_transport(DtlsTransport* rtp_dtls_transport,
 }
 
 int DtlsSrtpTransport::send_rtp(const char* data, size_t len) {
+    if (!is_srtp_active()) {
+        RTC_LOG(LS_WARNING) << "Failed to send rtp packet: Inactive srtp transport";
+        return -1;
+    }
+
+    int rtp_auth_tag_len = 0;
+    get_send_auth_tag_len(&rtp_auth_tag_len, nullptr);
+    rtc::CopyOnWriteBuffer packet(data, len + rtp_auth_tag_len);
+
+    char* buf = (char*)packet.data();
+    int size = packet.size();
+    uint16_t seq_num = parse_rtp_sequence_number(packet);
+    /*
+    if (!protect_rtp(buf, size, packet.capacity(), &len)) {
+        RTC_LOG(LS_WARNING) << "Failed to protect rtp packet, size=" << size
+            << ", seqnum=" << seq_num
+            << ", ssrc=" << parse_rtp_ssrc(packet)
+            << ", last_send_seq_num=" << _last_send_seq_num;
+    }
+
+    _last_send_seq_num = seq_num;
+
+    packet.SetSize(len);
+
+    return _rtp_dtls_transport->send_packet(packet.cdata(), packet.size());
+    */
+
     return -1;
 }
 
