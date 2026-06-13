@@ -197,7 +197,7 @@ bool IceController::_is_pingable(IceConnection* conn, int64_t now) {
 // IceController::select_connection_to_ping — 选择本周期要 ping 的连接
 //
 // 两层限速设计:
-//   Channel 层 (本方法): _last_ping_sent_ms → 控制整体发包节奏，一次只发一个 ping
+//   Channel 层 (本方法): last_ping_sent_ms → 控制整体发包节奏，一次只发一个 ping
 //   Connection 层 (_find_next_pingable_connection): 单连接限速，保护已有连接
 //
 // ping_interval 决定逻辑 (降级触发 480ms→48ms):
@@ -227,7 +227,7 @@ PingResult IceController::select_connection_to_ping(int64_t last_ping_sent_ms) {
     int now = rtc::TimeMillis();
     const IceConnection* conn = nullptr;
     // Channel 级速率门: 距离上次 ping 过去了 >= 当前所需间隔才进入连接选择
-    if (now >= _last_ping_sent_ms + ping_interval) {
+    if (now >= last_ping_sent_ms + ping_interval) {
         conn = _find_next_pingable_connection(now);
     }
 

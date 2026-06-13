@@ -66,7 +66,6 @@ private:
     IceTransportChannel* _ice_channel;
     IceConnection* _selected_connection = nullptr;
     std::vector<IceConnection*> _connections;
-    int64_t _last_ping_sent_ms = 0;                    // channel 全局速率门: 上次发出 ping 的时间
     std::set<IceConnection*> _pinged_connections;
     std::set<IceConnection*> _unpinged_connections;
 };
