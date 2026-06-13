@@ -11,7 +11,14 @@ SrtpSession::SrtpSession() {
 }
 
 SrtpSession::~SrtpSession() {
+    if (_session) {
+        srtp_set_user_data(_session, nullptr);
+        srtp_dealloc(_session);
+    }
 
+    if (_inited) {
+        _decrement_libsrtp_usage_count_and_maybe_deinit();
+    }
 }
 
 // 设置发送密钥 — ssrc_any_outbound 匹配任意出口 SSRC
@@ -188,6 +195,18 @@ bool SrtpSession::_increment_libsrtp_usage_count_and_maybe_init() {
 
     g_libsrtp_usage_count++;
     return true;
+}
+
+void SrtpSession::_decrement_libsrtp_usage_count_and_maybe_deinit() {
+    webrtc::GlobalMutexLock ls(&g_libsrtp_lock);
+
+    if (--g_libsrtp_usage_count == 0) {
+        int err = srtp_shutdown();
+        if (err) {
+            RTC_LOG(LS_WARNING) << "Failed to shutdown srtp, err: " << err;
+        }
+
+    }
 }
 
 // _update_key — update_send/update_recv 的共同实现

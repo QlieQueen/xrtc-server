@@ -67,8 +67,13 @@ protected:
     uint32_t _log_id;
 
     PeerConnection* _pc;
+
+private:
     PeerConnectionState _state = PeerConnectionState::k_new;
     RtcStreamListener* _listener = nullptr;
+    TimerWatcher* _ice_timeout_watcher = nullptr;
+
+    friend void ice_timeout_cb(EventLoop* el, TimerWatcher* w, void* data);
 };
 
 
