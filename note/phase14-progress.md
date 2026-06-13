@@ -1,36 +1,32 @@
-# Phase 14 进度 (断点备忘)
+# Phase 14 进度 (完成)
 
-## 当前进度
+## 最终状态: 6/6 commits ✅
 
-- ✅ commit 1: 转发 RTP 骨架
-- ✅ commit 2: 加密 RTP 发送 (protect_rtp)
-- ✅ commit 3: 加密 RTP + send_packet + push→pull RTP 转发 (合并提交 1.5.107)
-- ⬜ commit 4: STOP_PULL 命令 (84b1752)
-- ⬜ commit 5: 异常处理、代码完善 (5a1e89b)
-- ⬜ commit 6: 联调通过 (8e8a514)
+| # | commit | 内容 | 状态 |
+|---|--------|------|------|
+| 1 | `1.5.105` | 转发 RTP 数据骨架 | ✅ |
+| 2 | `1.5.106` | 加密 RTP 发送 | ✅ |
+| 3 | `1.5.107-108` | 加密 RTP + RTCP + 双向转发 | ✅ |
+| 4 | `1.5.109` | 停止拉流 | ✅ |
+| 5 | `1.5.110` | SrtpSession 析构 + ICE 超时保护 | ✅ |
+| 6 | `1.5.111` | on_stream_exception 替代直接 delete | ✅ |
 
-## 当前阻塞问题
+## 关键 bug 修复
 
-视频不渲染，原因是 RTCP 双向转发未实现。Pull 端收不到 I 帧 → 发 PLI → `on_rtcp_packet_received` 空实现 → PLI 丢弃 → 推流端不发 I 帧 → 死循环。
+1. **send_rtcp 调了 protect_rtp** — `dtls_srtp_transport.cpp:84` 误用 RTP 加密函数导致客户端 auth fail
+2. **RTCP 双向转发** — pull→push 方向缺失导致 PLI 无法到达推流端，视频不渲染
 
-## 下次继续的任务
+## Phase 14 全链路完成
 
-RTCP 完整链路需要补：
-
-| 文件 | 新增 |
-|------|------|
-| `SrtpSession` | `protect_rtcp` — `srtp_protect_rtcp` 包装 (need_len = in_len + _rtcp_auth_tag_len + sizeof(uint32_t)) |
-| `SrtpTransport` | `protect_rtcp` — 代理到 `_send_session` |
-| `DtlsSrtpTransport` | `send_rtcp` — buffer 分配 + encrypt + send_packet |
-| `TransportController` | `send_rtcp` |
-| `PeerConnection` | `send_rtcp` |
-| `RtcStream` | `send_rtcp` |
-| `RtcStreamManager` | RTCP 双向转发: push→pull (push stream RTCP → pull stream) + pull→push (pull stream PLI → push stream) |
-
-参考: `/home/ydqun/workspace/lession/xrtcserver` commit `3372f65`
-
-**Why:** RTCP 缺失导致 pull 端的 PLI 请求无法到达 push 端，推流端不发送 I 帧，视频永远渲染不了。
-
-**How to apply:** 下次从 `RtcStreamManager::on_rtcp_packet_received` 入口开始，按调用链逐层补 `protect_rtcp` + `send_rtcp`。
-
-参考: note/phase13-summary.md, note/phase14-background.md
+```
+UDP 加密包
+  → IceTransportChannel
+    → DtlsTransport
+      → DtlsSrtpTransport::_on_read_packet (解复用)
+        → unprotect (解密)
+        → signal → TransportController → PeerConnection → RtcStream → RtcStreamManager
+          → 转发:
+            push RTP  → pull->send_rtp  → protect_rtp  → DtlsTransport::send_packet → UDP
+            push RTCP → pull->send_rtcp → protect_rtcp → DtlsTransport::send_packet → UDP
+            pull RTCP → push->send_rtcp → protect_rtcp → DtlsTransport::send_packet → UDP
+```

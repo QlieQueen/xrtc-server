@@ -262,29 +262,14 @@ Parsed via `yaml-cpp` into `GeneralConf` / `SignalingServerOptions` / `RtcServer
 | 8 | STUN 消息编解码 | ✅ | `7012b73` → `c18f33d` (11 commits) |
 | 9 | ICE 连接状态机 + Controller | ✅ | `a0bdda8` → `9bb997d` (21 commits) |
 | **10** | **DTLS 握手 (DtlTransport)** | **✅ done** | `b01ce7f` → `f5719ec` (10 commits) |
-| **11** | **PC/ICE/Agent 三态聚合** | **pending** | `86a58c9` → `fc5ae77` (5 commits) |
-| 12 | PULL 流 + STOP 命令 + SSRC | pending | `d73cd98` → `29eb026` (10 commits) |
-| 13 | DtlsSrtpTransport + SRTP 密钥 + RTP/RTCP 加解密 | pending | `092c650` → `3372f65` (12 commits) |
-| 14 | STOP PULL + 异常处理 + 联调 | pending | `84b1752` → `8e8a514` (3 commits) |
+| **11** | **PC/ICE/Agent 三态聚合** | **✅ done** | `86a58c9` → `fc5ae77` (5 commits) |
+| **12** | **PULL 流 + STOP 命令 + SSRC** | **✅ done** | `d73cd98` → `29eb026` (10 commits) |
+| **13** | **DtlsSrtpTransport + SRTP 密钥 + RTP/RTCP 加解密** | **✅ done** | `092c650` → `3372f65` (12 commits) |
+| **14** | **STOP PULL + 异常处理 + 联调** | **✅ done** | `84b1752` → `8e8a514` (6 commits) |
 
-### Phase 10 当前进度
+### 全 Phase 完成
 
-- **参考项目**: `/home/ydqun/workspace/lession/xrtcserver`, commits `b01ce7f` → `f5719ec` (10 commits)
-- **已完成**: 10/10 commits ✅
-  - ✅ commit 1: DtlsTransport 封装 + signal_read_packet 链路 (`1.5.70`)
-  - ✅ commit 2: ClientHello 缓存 (`1.5.71`)
-  - ✅ commit 3: 安装 DTLS — StreamInterfaceChannel + _setup_dtls (`1.5.72`)
-  - ✅ commit 4: 设置本地证书 + _dtls_active (`1.5.73`)
-  - ✅ commit 5: 设置远程指纹 — 两条时序路径 (`1.5.74`)
-  - ✅ commit 6: 启动 DTLS — _maybe_start_dtls + ClientHello replay + _handle_dtls_packet (`1.5.75`)
-  - ✅ commit 7: DTLS 数据读取 — BufferQueue + _on_writable_state (`1.5.76`)
-  - ✅ commit 8: DTLS 数据写入 — Write() + ICE send_packet 链路 (`1.5.77`)
-  - ✅ commit 9: SRTP 密码套件 + is_rtp_packet + signal_read_packet (`1.5.78`)
-  - ✅ commit 10: DTLS 传输状态 — _on_dtls_event + k_connected/k_closed (`1.5.79`)
-  - ✅ commit 11: DTLS 接收状态 — _on_receiving_state mirror ICE receiving (`1.5.80`)
-- **注意**: `092c650` (DtlsSrtpTransport) 在参考仓库中位于 Phase 11 之后，不属于 Phase 10
-- **下一步**: Phase 11 `86a58c9` — 计算 PC 状态
-- **知识文档**: `note/phase10-background.md`, `note/phase10-summary.md`
+所有 14 个 Phase 已全部完成。端到端推拉流链路可正常工作。
 
 ### Phase 11 commit 清单
 
@@ -330,11 +315,11 @@ Parsed via `yaml-cpp` into `GeneralConf` / `SignalingServerOptions` / `RtcServer
 
 ### Phase 14 commit 清单
 
-| # | commit | 内容 |
-|---|--------|------|
-| 1 | `01880eb` | 转发 RTP 数据 |
-| 2 | `1cddb36` | 加密 RTP 发送 |
-| 3 | `3372f65` | 加密 RTP + 发送加密 RTCP |
-| 4 | `84b1752` | 处理停止拉流命令 |
-| 5 | `5a1e89b` | 异常处理、代码完善 |
-| 6 | `8e8a514` | 联调通过 |
+| # | 参考 commit | 本地 commit | 内容 |
+|---|-----------|------------|------|
+| 1 | `01880eb` | `1.5.105` | 转发 RTP 数据骨架 |
+| 2 | `1cddb36` | `1.5.106` | 加密 RTP 发送 |
+| 3 | `3372f65` | `1.5.107-108` | 加密 RTP + RTCP + 双向转发 |
+| 4 | `84b1752` | `1.5.109` | 停止拉流命令 |
+| 5 | `5a1e89b` | `1.5.110` | 异常处理 + 资源释放 |
+| 6 | `8e8a514` | `1.5.111` | 联调修复 — on_stream_exception |
