@@ -497,6 +497,16 @@ int PeerConnection::send_rtp(const char* data, size_t len) {
     return _transport_controller->send_rtp("audio", data, len);
 }
 
+int PeerConnection::send_rtcp(const char* data, size_t len) {
+    if (!_transport_controller) {
+        return -1;
+    }
+
+    // todo: 这里默认为bundle，所以直接使用mid为audio发送
+    // 需要根据实际情况进行完善（是否为bundle）
+    return _transport_controller->send_rtcp("audio", data, len);
+}
+
 // 信号回调 -- 把 candidate填入到 _local-desc
 void PeerConnection::_on_candidate_allocate_done(TransportController*,
         const std::string& transport_name,

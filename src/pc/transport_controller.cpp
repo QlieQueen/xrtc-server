@@ -15,6 +15,11 @@ TransportController::TransportController(EventLoop* el, PortAllocator* alloctor)
 
 // 析构函数 -- delete IceAgent
 TransportController::~TransportController() {
+    for (auto dtls_srtp : _dtls_srtp_transport_by_name) {
+        delete dtls_srtp.second;
+    }
+    _dtls_srtp_transport_by_name.clear();
+
     for (auto dtls : _dtls_transport_by_name) {
         delete dtls.second;
     }
@@ -249,6 +254,16 @@ int TransportController::send_rtp(const std::string& transport_name, const char*
     auto dtls_srtp = _get_dtls_srtp_transport(transport_name);
     if (dtls_srtp) {
         ret = dtls_srtp->send_rtp(data, len);
+    }
+
+    return ret;
+}
+
+int TransportController::send_rtcp(const std::string& transport_name, const char* data, size_t len) {
+    int ret = -1;
+    auto dtls_srtp = _get_dtls_srtp_transport(transport_name);
+    if (dtls_srtp) {
+        ret = dtls_srtp->send_rtcp(data, len);
     }
 
     return ret;

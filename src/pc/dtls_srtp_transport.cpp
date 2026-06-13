@@ -68,6 +68,36 @@ int DtlsSrtpTransport::send_rtp(const char* data, size_t len) {
     return _rtp_dtls_transport->send_packet((const char*)packet.cdata(), packet.size());
 }
 
+// send_rtcp — RTCP 加密发送路径
+// 1. 从 _send_session 获取 rtcp_auth_tag_len, 分配加密 buffer (预留 SRTCP index + auth tag)
+// 2. protect_rtcp 原地加密 → encrypt payload + SRTCP index + auth tag
+// 3. 加密后经 DtlsTransport::send_packet → ICE channel → UDP 发出
+int DtlsSrtpTransport::send_rtcp(const char* data, size_t len) {
+    if (!is_srtp_active()) {
+        RTC_LOG(LS_WARNING) << "Failed to send rtcp packet: Inactive srtp transport";
+        return -1;
+    }
+
+    int rtcp_auth_tag_len = 0;
+    get_send_auth_tag_len(nullptr, &rtcp_auth_tag_len);
+    rtc::CopyOnWriteBuffer packet(data, len, len + rtcp_auth_tag_len + sizeof(uint32_t));
+
+    char* buf = (char*)packet.data();
+    int size = packet.size();
+
+    if (!protect_rtcp(buf, size, packet.capacity(), &size)) {
+        int type = 0;
+        get_rtcp_type(buf, size, &type);
+        RTC_LOG(LS_WARNING) << "Failed to protect rtcp packet, size=" << size
+            << ", type=" << type;
+        return -1;
+    }
+
+    packet.SetSize(size);
+
+    return _rtp_dtls_transport->send_packet((const char*)packet.cdata(), packet.size());
+}
+
 // _on_read_packet — DTLS 握手完成后接收 RTP/RTCP 数据
 // 1. infer_rtp_packet_type 解复用 → RTP / RTCP / unknown
 // 2. 调试日志输出包类型 + 长度 (解密 + 上层转发在后续 commit 实现)

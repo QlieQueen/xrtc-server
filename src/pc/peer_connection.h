@@ -37,6 +37,7 @@ public:
     }
 
     int send_rtp(const char* data, size_t len);
+    int send_rtcp(const char* data, size_t len);
 
 public:
     sigslot::signal2<PeerConnection*, PeerConnectionState> signal_connection_state;
