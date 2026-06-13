@@ -44,6 +44,11 @@ int RtcStreamManager::stop_push(uint64_t uid, const std::string& stream_name) {
     return 0;
 }
 
+int RtcStreamManager::stop_pull(uint64_t uid, const std::string& stream_name) {
+    _remove_pull_stream(uid, stream_name);
+    return 0;
+}
+
 int RtcStreamManager::create_pull_stream(uint64_t uid, const std::string& stream_name, 
     bool audio, bool video, uint32_t log_id,
     rtc::RTCCertificate* certificate,
@@ -179,6 +184,8 @@ void RtcStreamManager::on_connection_state(RtcStream* stream,
     if (state == PeerConnectionState::k_failed) {
         if (stream->stream_type() == RtcStreamType::k_push) {
             _remove_push_stream(stream);
+        } else {
+            _remove_pull_stream(stream);
         }
     }
 }
