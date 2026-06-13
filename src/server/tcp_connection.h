@@ -34,7 +34,7 @@ public:
     size_t bytes_expected = XHEAD_SIZE; // 第一次期待读取的大小为头部大小
     size_t bytes_processed = 0; // 标记当前处理了buf里多少个字节的数据
     int current_state = STATE_HEAD;
-    unsigned long list_interaction = 0;
+    unsigned long last_interaction = 0;
     std::list<rtc::Slice> reply_list;  // 回复消息存放该链表
     size_t cur_resp_pos = 0;
 };

@@ -15,8 +15,8 @@ const size_t MAX_BUF_SIZE = 1500;
 // READ 常驻: 构造时注册，持续监听 UDP 数据到达
 // WRITE 按需: 仅在队列有数据待发送时开启，发送完立刻关闭，避免 busy loop
 // ============================================================================
-void async_udp_socket_io_cb(EventLoop* el, IOWatcher* /*w*/,
-        int fd, int events, void* data)
+void async_udp_socket_io_cb(EventLoop* /*el*/, IOWatcher* /*w*/,
+        int /*fd*/, int events, void* data)
 {
     AsyncUdpSocket* udp_socket = (AsyncUdpSocket*)data;
 

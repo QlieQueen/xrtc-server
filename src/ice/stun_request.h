@@ -53,7 +53,7 @@ class IceConnection;
 class StunRequest {
 public:
     StunRequest(StunMessage* msg);
-    ~StunRequest();
+    virtual ~StunRequest();
 
     std::string id() { return _msg->transaction_id(); }
     // request type — 用于 check_response 中验证响应类型是否与请求匹配
@@ -68,12 +68,12 @@ public:
     void set_manager(StunRequestManager* manager);
 
 protected:
-    virtual void prepare(StunMessage* msg) { }
+    virtual void prepare(StunMessage* /*msg*/) { }
 
     // 响应回调 — 由 StunRequestManager::check_response 根据响应类型分发
     // 子类重写以处理业务逻辑 (如 ConnectionRequest 委托给 IceConnection)
-    virtual void on_request_response(StunMessage* msg) { }
-    virtual void on_request_error_response(StunMessage* msg) { }
+    virtual void on_request_response(StunMessage* /*msg*/) { }
+    virtual void on_request_error_response(StunMessage* /*msg*/) { }
 
     friend class StunRequestManager;  // 允许 Manager 调用 set_manager()
 private:

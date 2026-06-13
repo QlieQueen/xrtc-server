@@ -195,8 +195,6 @@ void RtcStreamManager::on_rtp_packet_received(RtcStream* stream, const char* dat
         PullStream* pull_stream = _find_pull_stream(stream->get_stream_name());
         if (pull_stream) {
             pull_stream->send_rtp(data, len);
-        } else {
-            RTC_LOG(LS_WARNING) << "No pull stream found for stream " << stream->get_stream_name();
         }
     }
 }
@@ -206,15 +204,11 @@ void RtcStreamManager::on_rtcp_packet_received(RtcStream* stream, const char* da
         PullStream* pull_stream = _find_pull_stream(stream->get_stream_name());
         if (pull_stream) {
             pull_stream->send_rtcp(data, len);
-        } else {
-            RTC_LOG(LS_WARNING) << "No pull stream found for stream " << stream->get_stream_name();
         }
     } else if (RtcStreamType::k_pull == stream->stream_type()) {
         PushStream* push_stream = _find_push_stream(stream->get_stream_name());
         if (push_stream) {
             push_stream->send_rtcp(data, len);
-        } else {
-            RTC_LOG(LS_WARNING) << "No push stream found for stream " << stream->get_stream_name();
         }
     }
 }

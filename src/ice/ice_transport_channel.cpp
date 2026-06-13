@@ -24,8 +24,8 @@ IceTransportChannel::IceTransportChannel(EventLoop* el, PortAllocator* alloctor,
         IceCandidateComponent component) :
     _el(el),
     _transport_name(transport_name),
-    _alloctor(alloctor),
     _component(component),
+    _alloctor(alloctor),
     _ice_controller(std::make_unique<IceController>(this))
 {
     RTC_LOG(LS_INFO) << "ice transport channel created, transport_name: " << _transport_name

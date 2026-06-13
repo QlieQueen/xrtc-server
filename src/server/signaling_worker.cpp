@@ -48,8 +48,10 @@ void conn_io_cb(EventLoop* /*el*/, IOWatcher* /*w*/, int fd, int events, void* d
 }
 
 // typedef void (*timer_cb_t)(EventLoop* el, TimerWatcher* w, void* data);
-void conn_timer_cb(EventLoop* /*el*/, TimerWatcher* /*w*/, void* data) {
-    SignalingWorker* worker = (SignalingWorker*)data;
+void conn_timer_cb(EventLoop* el, TimerWatcher* /*w*/, void* data) {
+    SignalingWorker* worker = (SignalingWorker*)(el->owner());
+    TcpConnection* c = (TcpConnection*)data;
+    worker->_process_timeout(c);
 }
 
 SignalingWorker::SignalingWorker(int worker_id, SignalingServerOptions options) :
@@ -306,6 +308,13 @@ void SignalingWorker::_close_conn(TcpConnection* c) {
     _remove_conn(c);
 }
 
+void SignalingWorker::_process_timeout(TcpConnection* c) {
+    if (_el->now() - c->last_interaction >= (unsigned long)_options.connection_timeout) {
+        RTC_LOG(LS_INFO) << "connection timeout, fd: " << c->fd;
+        _close_conn(c);
+    }
+}
+
 void SignalingWorker::_remove_conn(TcpConnection* c) {
     _el->delete_io_event(c->io_watcher);
     _el->delete_timer(c->timer_watcher);
@@ -329,7 +338,7 @@ void SignalingWorker::_read_query(int fd) {
     c->querybuf = sdsMakeRoomFor(c->querybuf, read_len);
     nread = sock_read_data(fd, c->querybuf + qb_len, read_len);
 
-    c->list_interaction = _el->now();
+    c->last_interaction = _el->now();
     RTC_LOG(LS_INFO) << "sock read data, len: " << nread;
 
     if (-1 == nread || 0 == nread) {
@@ -417,7 +426,6 @@ int SignalingWorker::_process_request(TcpConnection* c,
 
     xhead_t* xh = (xhead_t*)(header.data());
 
-    int ret = 0;
     int cmdno;
     json root;
     try {

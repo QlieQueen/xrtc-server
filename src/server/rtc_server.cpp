@@ -16,7 +16,7 @@ namespace xrtc {
 const uint64_t k_year_in_ms =  365 * 24 * 3600 * 1000UL;
 
 //typedef void (*io_cb_t)(EventLoop* el, IOWatcher* w, int fd, int events, void*data);
-void rtc_server_recv_notify(EventLoop* el, IOWatcher* w, int fd, int events, void* data)
+void rtc_server_recv_notify(EventLoop* /*el*/, IOWatcher* /*w*/, int fd, int /*events*/, void* data)
 {
     int msg;
     if (sizeof(int) != read(fd, (void*)&(msg), sizeof(msg))) {

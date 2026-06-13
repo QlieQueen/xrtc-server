@@ -271,7 +271,7 @@ int TransportController::send_rtcp(const std::string& transport_name, const char
 
 // 继续向上转发
 void TransportController::_on_candidate_allocator_done(
-        IceAgent* ice_agent,
+        IceAgent* /*ice_agent*/,
         const std::string& transport_name,
         IceCandidateComponent component,
         const std::vector<Candidate>& candidates)

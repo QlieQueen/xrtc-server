@@ -135,7 +135,7 @@ void IceConnection::on_read_packet(const char* buf, size_t len, int64_t ts) {
 void IceConnection::print_pings_since_last_response(std::string& pings, size_t max) {
     std::stringstream ss;
     if (_pings_since_last_responses.size() > max) {
-        for (int i = 0; i < max; i++) {
+        for (size_t i = 0; i < max; i++) {
             ss << rtc::hex_encode(_pings_since_last_responses[i].id) << " ";
         }
         ss << "... " << (_pings_since_last_responses.size() - max) << " more";

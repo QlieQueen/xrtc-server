@@ -23,21 +23,6 @@ static RtpDirection get_direction(bool send, bool recv) {
     }
 }
 
-// "aceive"/"passive"/"actpass" -> ConnectionRole 枚举
-static ConnectionRole string_to_connection_role(const std::string& role) {
-    if (role == "active") {
-        return ACTIVE;
-    } else if (role == "passive") {
-        return PASSIVE;
-    } else if (role == "actpass") {
-        return ACTIVE;
-    } else if (role == "holdconn") {
-        return HOLDCONN;
-    } else {
-        return NONE;
-    }
-}
-
 PeerConnection::PeerConnection(EventLoop* el, PortAllocator* allocator) : 
     _el(el),
     _transport_controller(new TransportController(el, allocator))
@@ -510,7 +495,7 @@ int PeerConnection::send_rtcp(const char* data, size_t len) {
 // 信号回调 -- 把 candidate填入到 _local-desc
 void PeerConnection::_on_candidate_allocate_done(TransportController*,
         const std::string& transport_name,
-        IceCandidateComponent component,
+        IceCandidateComponent /*component*/,
         const std::vector<Candidate>& candidates)
 {
     if (!_local_desc) {

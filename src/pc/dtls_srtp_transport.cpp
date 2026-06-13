@@ -134,8 +134,7 @@ void DtlsSrtpTransport::_on_rtp_packet_received(rtc::CopyOnWriteBuffer packet, i
     int len = packet.size();
 
     if (!unprotect_rtp(data, len, &len)) {
-        const int k_failed_log = 100;
-        auto packet_array = 
+        auto packet_array =
             rtc::MakeArrayView(reinterpret_cast<const uint8_t*>(data), packet.size());
         if (_unprotect_fail_count % 100 == 0) {
             RTC_LOG(LS_WARNING) << "Failed to unprotect rtp packet: "
@@ -165,8 +164,6 @@ void DtlsSrtpTransport::_on_rtcp_packet_received(rtc::CopyOnWriteBuffer packet, 
     if (!unprotect_rtcp(data, len, &len)) {
         int type = 0;
         get_rtcp_type(data, len, &type);
-        auto packet_array = 
-        rtc::MakeArrayView(reinterpret_cast<const uint8_t*>(data), packet.size());
         RTC_LOG(LS_WARNING) << "Failed to unprotect rtcp packet: "
             << ", size=" << len
             << ", type=" << type;

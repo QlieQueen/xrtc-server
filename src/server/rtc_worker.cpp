@@ -8,7 +8,7 @@
 namespace xrtc {
 
 //typedef void (*io_cb_t)(EventLoop* el, IOWatcher* w, int fd, int events, void*data);
-void rtc_worker_recv_notify(EventLoop* el, IOWatcher* w, int fd, int events, void* data)
+void rtc_worker_recv_notify(EventLoop* /*el*/, IOWatcher* /*w*/, int fd, int /*events*/, void* data)
 {
     int msg;
     if (sizeof(int) != read(fd, (void*)&(msg), sizeof(int))) {

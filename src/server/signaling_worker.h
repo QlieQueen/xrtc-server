@@ -40,6 +40,7 @@ public:
 
     friend void signaling_worker_recv_nofify(EventLoop* el, IOWatcher* w, int fd, int events, void* data);
     friend void conn_io_cb(EventLoop* /*el*/, IOWatcher* /*w*/, int fd, int events, void* data);
+    friend void conn_timer_cb(EventLoop* el, TimerWatcher* /*w*/, void* data);
 
 private:
     void _add_reply(TcpConnection* c, const rtc::Slice& reply);
@@ -48,6 +49,7 @@ private:
     void _stop();
     void _new_conn(int fd);
     void _close_conn(TcpConnection* c);
+    void _process_timeout(TcpConnection* c);
     void _remove_conn(TcpConnection* c);
     void _read_query(int fd);
     void _write_query(int fd);
