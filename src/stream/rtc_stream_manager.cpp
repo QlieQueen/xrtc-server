@@ -219,4 +219,12 @@ void RtcStreamManager::on_rtcp_packet_received(RtcStream* stream, const char* da
     }
 }
 
+void RtcStreamManager::on_stream_exception(RtcStream* stream) {
+    if (RtcStreamType::k_push == stream->stream_type()) {
+        _remove_push_stream(stream);
+    } else if (RtcStreamType::k_pull == stream->stream_type()) {
+        _remove_pull_stream(stream);
+    }
+}
+
 } // namespace xrtc
