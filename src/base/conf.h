@@ -14,6 +14,9 @@ struct GeneralConf {
     // ice
     int ice_min_port = 0;
     int ice_max_port = 0;
+
+    std::string ipv4_addr;
+    std::string netcard;
 };
 
 int load_general_conf(const char* filename, GeneralConf* conf);

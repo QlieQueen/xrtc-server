@@ -24,6 +24,8 @@ int load_general_conf(const char *filename, GeneralConf* conf) {
         conf->log_to_stderr = config["log"]["log_to_stderr"].as<bool>();
 
         // ice
+        conf->netcard = config["ice"]["netcard"].as<std::string>();
+        conf->ipv4_addr = config["ice"]["ipv4_addr"].as<std::string>();
         conf->ice_min_port = config["ice"]["min_port"].as<int>();
         conf->ice_max_port = config["ice"]["max_port"].as<int>();
     } catch (YAML::Exception &e) {

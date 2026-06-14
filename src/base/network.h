@@ -8,6 +8,8 @@
 
 namespace xrtc {
 
+class GeneralConf;
+
 struct Network {
 public:
     Network(const std::string& name, const rtc::IPAddress& ip) : 
@@ -28,7 +30,7 @@ private:
 
 class NetworkManager {
 public:
-    NetworkManager();
+    NetworkManager(const GeneralConf* conf);
     ~NetworkManager();
 
     // 获取所有网卡

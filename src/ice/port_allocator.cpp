@@ -1,9 +1,11 @@
 #include "ice/port_allocator.h"
 
+#include "base/conf.h"
+
 namespace xrtc {
 
-PortAllocator::PortAllocator() : 
-    _network_manager(new NetworkManager())
+PortAllocator::PortAllocator(const GeneralConf* conf) : 
+    _network_manager(new NetworkManager(conf))
 {
 }
 

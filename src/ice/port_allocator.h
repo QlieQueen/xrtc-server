@@ -8,7 +8,7 @@ namespace xrtc {
 
 class PortAllocator {
 public:
-    PortAllocator();
+    PortAllocator(const GeneralConf* conf);
     ~PortAllocator();
 
     const std::vector<Network*>& get_networks();

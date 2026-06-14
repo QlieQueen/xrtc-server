@@ -13,7 +13,7 @@ namespace xrtc {
 
 RtcStreamManager::RtcStreamManager(EventLoop* el) :
     _el(el),
-    _allocator(new PortAllocator())
+    _allocator(new PortAllocator(g_conf))
 {
     if (g_conf) {
         _allocator->set_port_range(g_conf->ice_min_port, g_conf->ice_max_port);
