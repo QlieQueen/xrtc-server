@@ -37,8 +37,12 @@ description: "消息流程 + commit-by-commit 方式教学，手写实现 WebRTC
 | 10 | DTLS 握手 + SRTP | ✅ done | `b01ce7f` → `f5719ec` (10 commits) |
 | 11 | PC/ICE/Agent 三态聚合 | ✅ done | `86a58c9` → `fc5ae77` (5 commits) |
 | 12 | PULL 流 + STOP 命令 + SSRC | ✅ done | `d73cd98` → `29eb026` (10 commits) |
-| **13** | **RTP/RTCP 加解密 + 转发** | **pending** | `092c650` → `3372f65` (12 commits) |
-| 14 | 异常处理 + 完整联调 | pending | `5a1e89b` → `8e8a514` |
+| **13** | **RTP/RTCP 加解密 + 转发** | **✅ done** | `092c650` → `3372f65` (12 commits) |
+| 14 | 异常处理 + 完整联调 | ✅ done | `84b1752` → `8e8a514` (6 commits) |
+
+### 全 Phase 完成
+
+所有 14 个 Phase 已全部完成。端到端推拉流链路可正常工作。
 
 ## Phase 8 commit 清单
 
@@ -82,6 +86,66 @@ description: "消息流程 + commit-by-commit 方式教学，手写实现 WebRTC
 | 20 | `9bc4471` | ICE 连接探活机制 |
 | 21 | `9bb997d` | 更新 ICE 传输通道状态 |
 
+## Phase 10 commit 清单
+
+| # | commit | 内容 |
+|---|--------|------|
+| 1 | `b01ce7f` | DtlsTransport 骨架 + OpenSSL BIO 对接 |
+| 2~10 | — | DTLS 握手完成 (详见 CLAUDE.md) |
+
+## Phase 11 commit 清单
+
+| # | commit | 内容 |
+|---|--------|------|
+| 1 | `86a58c9` | 计算 PC 的状态 |
+| 2 | `9047639` | 计算 Ice 传输通道的状态 |
+| 3 | `c98be95` | 计算 IceAgent 的状态 |
+| 4 | `d77f345` | 重新计算 PC 状态 |
+| 5 | `fc5ae77` | PC 失败状态下的资源清理 |
+
+## Phase 12 commit 清单
+
+| # | commit | 内容 |
+|---|--------|------|
+| 1 | `d73cd98` | 分发服务支持停止推流 |
+| 2 | `3bb6a82` | 修复编译警告 |
+| 3 | `306556c` | 处理 PULL 命令 |
+| 4 | `5a0f518` | 音视频转发方案设计 |
+| 5 | `f494372` | 解析 SDP 的 SSRC 信息 |
+| 6 | `a0bb515` | 解析 SSRC 组信息 |
+| 7 | `a391d98` | 创建音视频 Track |
+| 8 | `8025d5e` | 获取音视频源 |
+| 9 | `e925bf0` | 设置音视频源 |
+| 10 | `29eb026` | SDP 中增加 SSRC 描述 |
+
+## Phase 13 commit 清单
+
+| # | commit | 内容 |
+|---|--------|------|
+| 1 | `092c650` | 创建 DtlsSrtpTransport 加密传输通道 |
+| 2 | `d52a949` | 从 DTLS 中导出密钥 |
+| 3 | `c442539` | 创建 SRTP 会话并设置参数 |
+| 4 | `7f79ec1` | 引入 libsrtp 库 |
+| 5 | `ad8bbde` | 初始化 libsrtp 库 |
+| 6 | `79057c3` | 创建 SRTP 上下文结构 |
+| 7 | `c68cac3` | 完成 SRTP 的设置和更新方法 |
+| 8 | `a177c95` | 开始安装 DTLS-SRTP |
+| 9 | `e43ac54` | 解复用 RTP 和 RTCP 包 |
+| 10 | `0cc8f93` | RTP 包判断方法 |
+| 11 | `8764293` | RTP 数据包解密 |
+| 12 | `b0ad147` | RTCP 数据包解密 + 获取 RTP/RTCP 数据包 |
+
+## Phase 14 commit 清单
+
+| # | 参考 commit | 本地 commit | 内容 |
+|---|-----------|------------|------|
+| 1 | `01880eb` | `1.5.105` | 转发 RTP 数据骨架 |
+| 2 | `1cddb36` | `1.5.106` | 加密 RTP 发送 |
+| 3 | `3372f65` | `1.5.107-108` | 加密 RTP + RTCP + 双向转发 |
+| 4 | `84b1752` | `1.5.109` | 停止拉流命令 |
+| 5 | `5a1e89b` | `1.5.110` | 异常处理 + 资源释放 |
+| 6 | `8e8a514` | `1.5.111` | 联调修复 — on_stream_exception |
+
 ## 参考文件速查
 
 每个 Phase 用到的参考代码：
@@ -93,8 +157,8 @@ description: "消息流程 + commit-by-commit 方式教学，手写实现 WebRTC
 | 10 | `pc/dtls_transport.h/.cpp`, `pc/dtls_srtp_transport.h/.cpp`, `pc/srtp_session.h/.cpp`, `pc/srtp_transport.h/.cpp` |
 | 11 | `pc/peer_connection.h/.cpp`, `ice/ice_transport_channel.h/.cpp`, `ice/ice_agent.h/.cpp` |
 | 12 | `stream/pull_stream.h/.cpp`, `stream/rtc_stream_manager.h/.cpp`, `server/rtc_worker.cpp` |
-| 13 | `module/rtp_rtcp/rtp_utils.h/.cpp` |
-| 14 | 端到端测试 |
+| 13 | `module/rtp_rtcp/rtp_utils.h/.cpp`, `pc/dtls_srtp_transport.h/.cpp`, `pc/srtp_session.h/.cpp` |
+| 14 | 端到端测试 + 联调 |
 
 ## 每个 Phase 结束后的验证
 
