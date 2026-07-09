@@ -193,6 +193,9 @@ void SignalingWorker::_process_rtc_msg() {
     switch (msg->cmdno) {
         case CMDNO_PUSH:
         case CMDNO_PULL:
+        case CMDNO_STOPPUSH:
+        case CMDNO_STOPPULL:
+        case CMDNO_ANSWER:
             _response_server_offer(msg);
             break;
 
@@ -587,6 +590,9 @@ int SignalingWorker::_process_stop_push(int cmdno, TcpConnection* c,
     msg->uid = uid;
     msg->stream_name = stream_name;
     msg->log_id = log_id;
+    msg->worker = this;
+    msg->conn = c;
+    msg->fd = c->fd;
 
     g_rtc_server->send_rtc_msg(msg);
 
@@ -619,6 +625,9 @@ int SignalingWorker::_process_stop_pull(int cmdno, TcpConnection* c,
     msg->uid = uid;
     msg->stream_name = stream_name;
     msg->log_id = log_id;
+    msg->worker = this;
+    msg->conn = c;
+    msg->fd = c->fd;
 
     g_rtc_server->send_rtc_msg(msg);
 
@@ -659,6 +668,9 @@ int SignalingWorker::_process_answer(int cmdno, TcpConnection* c,
     msg->stream_type = type;
     msg->sdp = answer;
     msg->log_id = log_id;
+    msg->worker = this;
+    msg->conn = c;
+    msg->fd = c->fd;
 
     g_rtc_server->send_rtc_msg(msg);
 

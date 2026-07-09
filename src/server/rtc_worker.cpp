@@ -188,34 +188,58 @@ void RtcWorker::_process_pull(std::shared_ptr<RtcMsg>& msg) {
 
 void RtcWorker::_process_stop_push(std::shared_ptr<RtcMsg>& msg) {
     int ret = _rtc_stream_mgr->stop_push(msg->uid, msg->stream_name);
+    if (ret != 0) {
+        msg->err_no = -1;
+    }
 
     RTC_LOG(LS_INFO) << "rtc worker process stop push, uid: " << msg->uid
         << ", stream_name: " << msg->stream_name
         << ", worker_id: " << _worker_id
         << ", log_id: " << msg->log_id
         << ", ret: " << ret;
+
+    SignalingWorker* worker = (SignalingWorker*)msg->worker;
+    if (worker) {
+        worker->send_rtc_msg(msg);
+    }
 }
 
 void RtcWorker::_process_stop_pull(std::shared_ptr<RtcMsg>& msg) {
     int ret = _rtc_stream_mgr->stop_pull(msg->uid, msg->stream_name);
+    if (ret != 0) {
+        msg->err_no = -1;
+    }
 
     RTC_LOG(LS_INFO) << "rtc worker process stop pull, uid: " << msg->uid
         << ", stream_name: " << msg->stream_name
         << ", worker_id: " << _worker_id
         << ", log_id: " << msg->log_id
         << ", ret: " << ret;
+
+    SignalingWorker* worker = (SignalingWorker*)msg->worker;
+    if (worker) {
+        worker->send_rtc_msg(msg);
+    }
 }
 
 void RtcWorker::_process_answer(std::shared_ptr<RtcMsg>& msg) {
     RTC_LOG(LS_INFO) << "rtc worker process answer request, worker_id: " << _worker_id;
     int ret = _rtc_stream_mgr->set_answer(msg->uid, msg->stream_name,
         msg->sdp, msg->stream_type, msg->log_id);
+    if (ret != 0) {
+        msg->err_no = -1;
+    }
 
     RTC_LOG(LS_INFO) << "rtc worker process answer, uid: " << msg->uid
         << ", stream_name: " << msg->stream_name
         << ", worker_id: " << _worker_id
         << ", log_id: " << msg->log_id
         << ", ret: " << ret;
+
+    SignalingWorker* worker = (SignalingWorker*)msg->worker;
+    if (worker) {
+        worker->send_rtc_msg(msg);
+    }
 }
 
 void RtcWorker::_process_notify(int msg) {

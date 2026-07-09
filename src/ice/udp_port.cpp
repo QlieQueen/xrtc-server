@@ -23,6 +23,10 @@ UDPPort::UDPPort(EventLoop* el, const std::string& transport_name,
 }
 
 UDPPort::~UDPPort() {
+    if (_socket != -1) {
+        close(_socket);
+        _socket = -1;
+    }
 }
 
 static std::string compute_foundation(const std::string& type,
