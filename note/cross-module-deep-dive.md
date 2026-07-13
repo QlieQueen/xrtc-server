@@ -18,6 +18,7 @@
 10. [PULL 流 + SSRC 透传](#10-pull-流--ssrc-透传)
 11. [RTP/RTCP 数据包处理](#11-rtprtcp-数据包处理)
 12. [STOP 与资源清理链](#12-stop-与资源清理链)
+13. [ICE 5 级排序 + 两层限速：代码级走读](#13-ice-5-级排序--两层限速代码级走读)
 
 ---
 
@@ -1446,3 +1447,630 @@ ICE ping timer (48ms) → _on_check_and_ping()
 | 响应 | 返回 JSON `{errno:0}` | 无响应 | 无响应 |
 | UID 校验 | 有（外部传入） | 有（从 stream 对象取） | 有（从 stream 对象取） |
 | 收敛点 | `_remove_push/pull_stream(uid, name)` | `_remove_push/pull_stream(stream)` | `_remove_push/pull_stream(stream)` |
+
+---
+
+## 13. ICE 5 级排序 + 两层限速：代码级走读
+
+> 从第一个 UDP 包到达、创建 IceConnection、冷启动定时器，到稳态每周期探活、选连接、排序、升降档的完整代码链路。所有代码位置指向 `src/ice/`。
+
+### 13.1 关键常量速查
+
+| 常量 | 值 | 定义位置 | 含义 |
+|------|-----|---------|------|
+| `WEAK_PING_INTERVAL` | 48ms | `ice_def.h` | Channel weak 时的发包间隔（10000bps 带宽假设） |
+| `STRONG_PING_INTERVAL` | 480ms | `ice_def.h` | Channel strong 时的发包间隔（1000bps 带宽假设） |
+| `STABLING_CONNECTION_PING_INTERVAL` | 900ms | `ice_def.h` | 单连接不稳定时的保活间隔 |
+| `STABLE_CONNECTION_PING_INTERVAL` | 2500ms | `ice_def.h` | 单连接稳定时的保活间隔 |
+| `MIN_PINGS_AT_WEAK_PING_INTERVAL` | 3 | `ice_def.h` | 新连接快速初探的 ping 次数阈值 |
+| `k_min_inprovement` | 10ms | `ice_controller.cpp:11` | RTT 切换防抖：top 必须比当前 selected 至少小 10ms |
+| `RTT_RATIO` | 3 | `ice_connection.cpp:19` | RTT 指数平滑权重：old : new = 3 : 1 |
+| `CONNECTION_WRITE_CONNECT_FAILS` | 5 | `ice_def.h` | 连续未回复 ping 数 ≥5 → 触发降级检查 |
+| `CONNECTION_WRITE_CONNECT_TIMEOUT` | 5000ms | `ice_def.h` | WRITABLE → UNRELIABLE 的超时阈值 |
+| `CONNECTION_WRITE_TIMEOUT` | 15000ms | `ice_def.h` | UNRELIABLE/INIT → TIMEOUT 的超时阈值 |
+| `WEAK_CONNECTION_RECEIVE_TIMEOUT` | 2500ms | `ice_def.h` | receiving 方向的超时 |
+| `PING_INTERVAL_DIFF` | 5ms | `ice_transport_channel.cpp:13` | 时钟容差，防定时器触发早于精确间隔导致错过周期 |
+
+### 13.2 冷启动：从第一个 UDP 包到定时器启动
+
+整个 ICE 探活系统的起点不是定时器，而是一个 UDP 包的到达。
+
+**第一步 — `_on_unknown_address`**（`ice_transport_channel.cpp:138`）。
+
+客户端发来 STUN Binding Request。`UDPPort::_on_read_packet` 发现 `get_connection(addr)` 为 nullptr（未知地址），走 `get_stun_message` → CRC32 fingerprint 校验通过 → 发射 `signal_unknown_address`。`IceTransportChannel::_on_unknown_address` 接住后做五件事：
+
+```cpp
+// 1. 从 STUN 消息中提取 PRIORITY 属性
+const StunUint32Attribute* priority_attr = stun_msg->get_uint32_t(STUN_ATTR_PRIORITY);
+
+// 2. 构造 prflx candidate
+Candidate remote_candidate;
+remote_candidate.address = addr;          // 对端 IP:Port
+remote_candidate.username = remote_ufrag; // 对端 ICE ufrag（从 STUN USERNAME 提取）
+remote_candidate.password = _remote_ice_params.ice_pwd; // ⚠ 此时可能为空！
+remote_candidate.type = PRFLX_PORT_TYPE;  // "prflx"
+
+// 3. 创建 IceConnection
+IceConnection* conn = port->create_connection(remote_candidate);
+
+// 4. 注册到 controller + 连接三条信号线
+_add_connection(conn);
+
+// 5. 回复 STUN Binding Response（用 SFU 的 ice-pwd 做 MESSAGE-INTEGRITY）
+conn->handle_stun_binding_request(stun_msg);
+
+// 6. 首次排序 + 选路 + 可能启动定时器
+_sort_connections_and_update_state();
+```
+
+**密码的"先有鸡还是先有蛋"**：第 2 步 `remote_candidate.password = _remote_ice_params.ice_pwd`——如果 ANSWER 还没到，`_remote_ice_params` 为空，密码就是空字符串。这会导致第 6 步 `_is_pingable` 返回 false，定时器暂不启动。后面客户端发来 ANSWER → `set_remote_ice_params` → `maybe_set_remote_ice_params` 补填密码 → 再次调 `_sort_connections_and_update_state` → 这次 `_is_pingable` 为 true → 定时器启动。
+
+**第二步 — `_add_connection`**（`ice_transport_channel.cpp:195`）。连接三条信号线：
+
+| 信号 | 触发时机 | 槽函数 | 做什么 |
+|------|---------|--------|--------|
+| `signal_state_change` | `set_write_state` / `update_receiving` 状态变化 | `_on_connection_state_change` | 重新排序 + 可能切换 selected |
+| `signal_connection_destroy` | `IceConnection::destroy()` | `_on_connection_destroyed` | 从 controller 清理；若销毁的是 selected → 重选 |
+| `signal_read_packet` | `on_read_packet` 判定非 STUN 包 | `_on_read_packet` | 透传给 DtlsTransport |
+
+同时在 controller 侧：`_connections.push_back(conn)` + `_unpinged_connections.insert(conn)`（`ice_controller.cpp:164`）。
+
+**第三步 — `_sort_connections_and_update_state`**（`ice_transport_channel.cpp:360`）。编排三件事：
+
+```cpp
+void IceTransportChannel::_sort_connections_and_update_state() {
+    _maybe_switch_selected_connection(
+        _ice_controller->sort_and_switch_connection());  // A. 排序 + 可能切换
+    _update_state();                                      // B. 聚合 writable/receiving
+    _maybe_start_pinging();                               // C. 可能首次启动定时器
+}
+```
+
+**A. `sort_and_switch_connection()`**（`ice_controller.cpp:82`）。冷启动时 `_selected_connection == nullptr`，直接走到 `return top_connection`——"还没有 selected，排序后第一个就是"。`_switch_selected_connection` 将其设为 selected。
+
+**B. `_update_state()`**（`ice_transport_channel.cpp:293`）：
+
+```cpp
+bool writable = _selected_connection && _selected_connection->writable();
+_set_writable(writable);
+
+bool receiving = false;
+for (auto conn : _ice_controller->connections()) {
+    if (conn->receiving()) { receiving = true; break; }  // 任意连接 receiving 就行
+}
+_set_receiving(receiving);
+```
+
+**方向不对称**：`writable` 只看 selected connection（数据发送走它），`receiving` 看任意连接（对端可能从多个路径发数据过来）。
+
+**C. `_maybe_start_pinging()`**（`ice_transport_channel.cpp:414`）：
+
+```cpp
+void IceTransportChannel::_maybe_start_pinging() {
+    if (_start_pinging) return;    // ★ 只启动一次，永不重复
+    if (_ice_controller->has_pingable_connection()) {
+        _el->start_timer(_ping_watcher, _cur_ping_interval * 1000);  // 48ms
+        _start_pinging = true;
+    }
+}
+```
+
+`has_pingable_connection()`（`ice_controller.cpp:145`）遍历所有连接调 `_is_pingable`。只要有一个满足条件，定时器就启动。
+
+**冷启动时序小结**：
+
+```
+UDP 收 STUN Binding Request
+  → _on_unknown_address
+    → create_connection (new IceConnection)
+    → _add_connection (注册信号 + 加入 controller)
+    → send_stun_binding_response (回复 Binding Response)
+    → _sort_connections_and_update_state
+      → sort_and_switch_connection (冷启动: 无 selected → 直接选 top)
+      → _update_state (writable=false, receiving=false)
+      → _maybe_start_pinging (密码空 → has_pingable=false → 暂不启动)
+
+... ANSWER 到达 ...
+
+set_remote_ice_params
+  → maybe_set_remote_ice_params (补填 _remote_candidate.password)
+  → _sort_connections_and_update_state
+    → _maybe_start_pinging (密码非空 → has_pingable=true → start_timer 48ms ★)
+```
+
+---
+
+### 13.3 稳态：`_on_check_and_ping` 每周期循环
+
+定时器启动后，libev 每 `_cur_ping_interval`（初始 48ms）回调 `ice_ping_cb` → `_on_check_and_ping`（`ice_transport_channel.cpp:448`）。五个步骤：
+
+```cpp
+void IceTransportChannel::_on_check_and_ping() {
+    _update_connection_states();                            // ① 探活降级
+    auto result = _ice_controller->select_connection_to_ping(
+        _last_ping_sent_ms - PING_INTERVAL_DIFF);          // ② 两层限速选连接
+    if (result.conn) {
+        _ping_connection(conn);                            // ③ 发出 STUN Binding Request
+        _ice_controller->mark_connection_pinged(conn);     // ④ unpinged → pinged
+    }
+    if (_cur_ping_interval != result.ping_interval) {      // ⑤ 升降档
+        _cur_ping_interval = result.ping_interval;
+        _el->stop_timer(_ping_watcher);
+        _el->start_timer(_ping_watcher, _cur_ping_interval * 1000);
+    }
+}
+```
+
+**`PING_INTERVAL_DIFF = 5ms` 时钟容差**：`select_connection_to_ping` 的参数是 `_last_ping_sent_ms - 5`。假如定时器因系统调度在 479ms 触发而非精确 480ms，用 `last_ping_sent_ms - 5` 相当于把门控放宽 5ms，避免因时钟粒度错过周期。
+
+**① `_update_connection_states`**（`ice_transport_channel.cpp:474`）。遍历所有连接，逐个调 `conn->update_state(now)`。降级逻辑见 §13.7。
+
+**② `select_connection_to_ping`**：核心调度逻辑，见 §13.4 两层限速。
+
+**③ `_ping_connection`**（`ice_transport_channel.cpp:488`）：
+
+```cpp
+void IceTransportChannel::_ping_connection(IceConnection* conn) {
+    _last_ping_sent_ms = rtc::TimeMillis();  // ★ Channel 级全局时间戳
+    conn->ping(_last_ping_sent_ms);
+}
+```
+
+`conn->ping(now)`（`ice_connection.cpp:354`）：创建 `ConnectionRequest`（含 STUN Binding Request + 随机 transaction_id），记录 `SentPing(id, now)` 到 `_pings_since_last_responses` 列表，通过 `StunRequestManager::send()` 序列化并发出。`_num_pings_sent++`。
+
+**④ `mark_connection_pinged`**（`ice_controller.cpp:113`）：从 `_unpinged_connections` 移入 `_pinged_connections`。
+
+**⑤ 升降档**：`_weak()` 状态变化导致 `ping_interval` 在 48ms ↔ 480ms 之间切换时，停止当前定时器、按新间隔重启。
+
+---
+
+### 13.4 第一层限速：Channel 级速率门
+
+`select_connection_to_ping`（`ice_controller.cpp:214`）先定 `ping_interval`，再用它做门控。
+
+```cpp
+PingResult IceController::select_connection_to_ping(int64_t last_ping_sent_ms) {
+    // Step 1: 确定 channel 级 ping_interval
+    bool need_ping_more_at_weak = false;
+    for (auto conn : _connections) {
+        if (conn->num_pings_sent() < MIN_PINGS_AT_WEAK_PING_INTERVAL) {  // < 3
+            need_ping_more_at_weak = true;
+            break;
+        }
+    }
+    int ping_interval = (_weak() || need_ping_more_at_weak)
+        ? WEAK_PING_INTERVAL     // 48ms
+        : STRONG_PING_INTERVAL;  // 480ms
+
+    // Step 2: Channel 级门控
+    int now = rtc::TimeMillis();
+    const IceConnection* conn = nullptr;
+    if (now >= last_ping_sent_ms + ping_interval) {  // ★ 两用的 last_ping_sent_ms
+        conn = _find_next_pingable_connection(now);   // 进入连接级选择
+    }
+
+    return PingResult(conn, ping_interval);
+}
+```
+
+**`ping_interval` 的三个决策分支**：
+
+| 条件 | interval | 场景 |
+|------|----------|------|
+| `_weak()` = true | **48ms** | selected 连接断了，急需探测新路径 |
+| 存在 `num_pings_sent < 3` 的连接 | **48ms** | 新建连接快速完成初探（3 次 ping） |
+| 以上都不满足 | **480ms** | 已有稳定连接，低频保活即可 |
+
+`_weak()` 定义（`ice_controller.h:54`）：
+
+```cpp
+bool _weak() {
+    return _selected_connection == nullptr
+        || _selected_connection->weak();
+}
+// IceConnection::weak(): return !(writable() && receiving());
+// 即"双向都通"才不算 weak
+```
+
+**`need_ping_more_at_weak` 的作用**：即使 selected connection 是 writable + receiving（不是 weak），只要还存在某个新连接未完成 3 次初探，channel 也维持 48ms 快速节奏，给所有连接公平的初探机会。
+
+**门控的含义**：`last_ping_sent_ms` 是 channel 级全局时间戳——每次 `_ping_connection` 更新。整个 channel 所有连接共享一个发包时钟，**一次定时器触发最多发一个 ping**。
+
+---
+
+### 13.5 第二层限速：Connection 级间隔 + Round-Robin
+
+Channel 级放行后，`_find_next_pingable_connection`（`ice_controller.cpp:252`）做连接级选择：
+
+```cpp
+const IceConnection* IceController::_find_next_pingable_connection(int64_t now) {
+    // ① selected connection 优先
+    if (_selected_connection && _selected_connection->writable() &&
+            _is_connection_past_ping_interval(_selected_connection, now)) {
+        return _selected_connection;
+    }
+
+    // ② unpinged 集合中还有可 ping 的吗？
+    bool has_pingable = false;
+    for (auto conn : _unpinged_connections) {
+        if (_is_pingable(conn, now)) { has_pingable = true; break; }
+    }
+
+    // ③ unpinged 全部不可 ping → 一轮结束，全部倒回，开始新一轮
+    if (!has_pingable) {
+        _unpinged_connections.insert(_pinged_connections.begin(),
+            _pinged_connections.end());
+        _pinged_connections.clear();
+    }
+
+    // ④ 在 unpinged 中选最 overdue 的连接
+    IceConnection* find_conn = nullptr;
+    for (auto conn : _unpinged_connections) {
+        if (!_is_pingable(conn, now)) continue;
+        if (_more_pingable(conn, find_conn)) {
+            find_conn = conn;  // last_ping_sent 更小 → 等得更久 → 优先
+        }
+    }
+    return find_conn;
+}
+```
+
+**Round-Robin 双集合机制**：
+
+```
+unpinged: {A, B, C}  pinged: {}
+  周期1: ping A → unpinged: {B, C}, pinged: {A}
+  周期2: ping B → unpinged: {C},    pinged: {A, B}
+  周期3: ping C → unpinged: {},     pinged: {A, B, C}
+  周期4: unpinged 无可 ping → 倒回 → unpinged: {A, B, C}, pinged: {}  ← 新一轮
+```
+
+**为什么 selected connection 优先？** 它是数据发送的出口——所有 DTLS 握手包和 RTP 媒体包都经过它。优先 ping selected connection 保证数据通道的 writable 状态始终是最新鲜的。
+
+**`_more_pingable`**（`ice_controller.cpp:293`）：比较 `last_ping_sent`，值更小的优先。等价于"谁等得最久就先 ping 谁"，保证 round-robin 公平。
+
+**`_is_pingable` 的三级判断**（`ice_controller.cpp:181`）：
+
+```cpp
+bool IceController::_is_pingable(IceConnection* conn, int64_t now) {
+    // ① 对端凭据必须完整（ANSWER 已到达）
+    if (remote.username.empty() || remote.password.empty()) return false;
+
+    // ② channel weak → 跳过连接级间隔限制，任何有凭据的连接都可以 ping
+    if (_weak()) return true;
+
+    // ③ channel strong → 必须过连接级 ping 间隔
+    return _is_connection_past_ping_interval(conn, now);
+}
+```
+
+**连接级间隔三级**（`_get_connection_ping_interval`，`ice_controller.cpp:335`）：
+
+| 条件 | 间隔 | 语义 |
+|------|------|------|
+| `num_pings_sent < 3` | **48ms** | 新连接快速初探 |
+| `_weak()` 或 `!conn->stable(now)` | **900ms** | 连接不稳定，中频探测 |
+| 以上都不满足 | **2500ms** | 连接稳定，低频保活 |
+
+`conn->stable()` 的定义（`ice_connection.cpp:324`）：
+
+```cpp
+bool IceConnection::stable(int64_t now) const {
+    return _rtt_samples > RTT_RATIO + 1    // RTT 样本 > 4（至少 5 次采样，平滑值可靠）
+        && !_miss_response(now);           // 没有 ping 等待超过 2*RTT（无丢包）
+}
+```
+
+---
+
+### 13.6 两层限速完整矩阵
+
+```
+                    Channel 级门                          Connection 级门
+                    ────────────                          ─────────────────
+                    控制整体发包节奏                       保护单连接不被过度 ping
+
+WEAK (48ms):       每 48ms 最多 1 个 ping                 跳过（_weak() 直接返回 true）
+STRONG (480ms):    每 480ms 最多 1 个 ping                新连接 48ms / 不稳定 900ms / 稳定 2500ms
+```
+
+**两层都通过才真正发包**。举例：
+
+| 场景 | Channel 级 | Connection 级 | 实际效果 |
+|------|-----------|--------------|---------|
+| 新连接 + channel weak | 48ms | 跳过（48ms 初探） | ~48ms |
+| 新连接 + channel strong | 480ms | 48ms | 实际受 channel 门限 ~480ms |
+| 稳定连接 + channel strong | 480ms | 2500ms | 实际受 connection 门限 ~2500ms |
+| 连接断开 + channel weak | 48ms | 跳过 | 48ms 加速探测，尽快找到新路径 |
+
+**关键**：Channel weak 时 connection 级门被绕过——此时 selected 连接已断，一切以最快找到新路径为优先，不需要保护连接。
+
+---
+
+### 13.7 连接写状态降级：`update_state`
+
+`IceConnection::update_state()`（`ice_connection.cpp:244`）是探活的核心，每次 `_on_check_and_ping` 循环第一步就调它。
+
+**RTT 容忍窗口**：
+
+```cpp
+int rtt = 2 * _rtt;  // 2 倍当前 RTT 作为容忍窗口
+if (rtt < MIN_RTT) rtt = MIN_RTT;      // 钳位下限 100ms
+else if (rtt > MAX_RTT) rtt = MAX_RTT; // 钳位上限 60s
+```
+
+**两阶段退化**：
+
+```
+阶段 1: STATE_WRITABLE → STATE_WRITE_UNRELIABLE
+  条件 (AND):
+    _too_many_ping_failed(5, rtt, now)   → 第 5 个未回复 ping 已过 rtt 容忍窗口
+    _too_long_without_response(5000, now) → 最早未回复 ping 等待 >5s
+
+阶段 2: STATE_WRITE_UNRELIABLE / STATE_WRITE_INIT → STATE_WRITE_TIMEOUT
+  条件:
+    _too_long_without_response(15000, now) → 最早未回复 ping 等待 >15s
+```
+
+`_too_many_ping_failed` 的逻辑（`ice_connection.cpp:211`）：
+
+```cpp
+bool IceConnection::_too_many_ping_failed(size_t max_pings, int rtt, int64_t now) {
+    if (_pings_since_last_responses.size() < max_pings) return false;
+    // 取第 max_pings 个（0-indexed = 第 5 个）未回复 ping
+    int expected_response_time = _pings_since_last_responses[max_pings - 1].sent_time + rtt;
+    return now > expected_response_time;
+    // "第 5 个 ping 发出去后，过了 2*RTT 还没收到任何回复" → 连续失败 ≥5 次
+}
+```
+
+**为什么阶段 1 需要两个条件同时成立？** 单次 ping 丢包是正常的（UDP 不可靠），必须连续 5 次失败 + 超过 5 秒才确认"不是偶然丢包、确实出了问题"。两个条件互补——RTT 容忍窗口适应快速变化的网络，5 秒硬超时兜底极端情况。
+
+**`update_receiving` 末尾调用**（`ice_connection.cpp:414`）：
+
+```cpp
+void IceConnection::update_receiving(int64_t now) {
+    bool receiving = false;
+    if (_last_ping_sent < _last_ping_response_received) {
+        receiving = true;  // 发了 ping，之后收到了对方的 ping response → 对端活着
+    } else {
+        receiving = last_received() > 0
+            && (now < last_received() + receiving_timeout());  // 2500ms 窗口内收到过数据
+    }
+    if (_receiving != receiving) { _receiving = receiving; signal_state_change(this); }
+}
+```
+
+第一条判断路径 `_last_ping_sent < _last_ping_response_received`：我们发的 ping 是对端用 `_remote_candidate.password (客户端密码)` 验证的，客户端回复的 Binding Response 也是用同一个密码做 MI，说明客户端确实知道自己的密码——对端身份确认、路径存活。
+
+---
+
+### 13.8 5 级排序算法 + RTT 防抖
+
+`sort_and_switch_connection`（`ice_controller.cpp:82`）被 `_sort_connections_and_update_state` 调用——每次连接状态变化时触发，不仅仅是定时器周期。
+
+```cpp
+IceConnection* IceController::sort_and_switch_connection() {
+    // Step 1: stable_sort — 多级比较器 + RTT fallback
+    absl::c_stable_sort(_connections, [this](IceConnection* a, IceConnection* b) {
+        int cmp = _compare_connections(a, b);
+        if (cmp != 0) return cmp > 0;  // 前 5 级有明确胜负
+        return a->rtt() < b->rtt();    // 第 6 级: RTT fallback
+    });
+
+    IceConnection* top = _connections.empty() ? nullptr : _connections[0];
+
+    // Step 2: 三种不切换的情况
+    if (!ready_to_send(top) || top == _selected_connection) return nullptr;
+
+    // Step 3: 冷启动 — 还没有 selected，直接选
+    if (!_selected_connection) return top;
+
+    // Step 4: RTT 防抖 — top 的 RTT 必须比当前 selected 至少小 10ms
+    if (top->rtt() <= _selected_connection->rtt() - k_min_inprovement) {
+        return top;  // 值得切换
+    }
+    return nullptr;  // RTT 差距不够 → 不切换，防止 ping-pong 振荡
+}
+```
+
+**为什么用 `stable_sort`？** 保证排序稳定——前 5 级相等 + RTT 相等的连接保持原有相对顺序，避免每次排序都改变 selected connection，造成不必要的切换。
+
+**`_compare_connections` 5 级比较器**（`ice_controller.cpp:28`）：
+
+| 级别 | 比较项 | 规则 | 为什么这一级不可或缺 |
+|------|--------|------|-------------------|
+| 1 | `writable()` | true > false | 能发数据是首要条件。writable=false 直接淘汰 |
+| 2 | `write_state()` | 值小的 > 值大的 | writable 是二值，两个 writable=true 的连接可能一个 WRITABLE(0)、一个 UNRELIABLE(1)——需要更细粒度区分 |
+| 3 | `receiving()` | true > false | 对端→我方向还活着。两个都 writable 但一个对端已失活的数据通道不可靠 |
+| 4 | `priority()` | 值大的 > 值小的 | RFC 5245 公式：`2^32*min(G,D) + 2*max(G,D) + (G>D?1:0)`，编码了 candidate 类型偏好 |
+| 5 | `rtt()` | 值小的 > 值大的 | `stable_sort` lambda 中 fallback。前 4 级全相等时，RTT 最小的最优先 |
+
+**为什么 write_state 单独一级而不是只看 writable？** 假设两个连接：
+
+```
+Conn A: writable=true, write_state=STATE_WRITE_UNRELIABLE (1)  ← 不稳定但还能用
+Conn B: writable=true, write_state=STATE_WRITABLE (0)          ← 健康
+```
+
+如果只看 writable，两者打平，得靠后面的优先级和 RTT 决定——可能不稳定连接反而胜出。有了 write_state 这一级，Conn B 直接胜出，不必走到后面的比较。
+
+**`ready_to_send`**（`ice_controller.cpp:64`）：
+
+```cpp
+bool IceController::ready_to_send(IceConnection* conn) {
+    return conn && (conn->writable() ||
+            conn->write_state() == IceConnection::STATE_WRITE_UNRELIABLE);
+}
+```
+
+`STATE_WRITE_UNRELIABLE` 也能发——"不太稳定但还没死，数据照样发，同时继续 ping 找更好的"。只有 `STATE_WRITE_TIMEOUT` 才真正不能发。
+
+**RTT 防抖的经济学解释**：两连接 RTT 分别是 15ms 和 20ms，差距仅 5ms。如果无阈值就切换，可能下一个 ping 周期 RTT 变成 17ms vs 18ms 又切回去——切换本身有代价（selected 变更可能触发上层信号链）。10ms 阈值把这种微小的随机波动过滤掉，只在"新连接明显更好"时才切。
+
+---
+
+### 13.9 RTT 指数平滑
+
+`received_ping_response`（`ice_connection.cpp:462`）：
+
+```cpp
+void IceConnection::received_ping_response(int rtt) {
+    if (_rtt_samples > 0) {
+        _rtt = rtc::GetNextMovingAverage(_rtt, rtt, RTT_RATIO);
+        // 等价于: _rtt = (_rtt * 3 + rtt) / 4  →  旧值 75% + 新值 25%
+    } else {
+        _rtt = rtt;  // 首次测量直接赋值，不参与平滑（避免初始 outlier 锚定）
+    }
+    ++_rtt_samples;
+    _last_ping_response_received = rtc::TimeMillis();
+    _pings_since_last_responses.clear();  // 收到回复 → 清空未回复 ping 列表
+    update_receiving(_last_ping_response_received);
+    set_write_state(STATE_WRITABLE);
+    set_state(IceCandidatePairState::SUCCEEDED);
+}
+```
+
+**权重 3:1 的含义**：RTT 对单次网络抖动敏感，但平滑后不能太迟钝。3:1 是 RFC 6298 TCP RTO 的经典权重——足够平滑以过滤噪声，又足够灵敏以反映趋势变化。
+
+**首次测量直接赋值**：如果第一次 RTT 测量值是异常的 500ms（偶然丢包重传），用平滑公式的话初始 `_rtt` 被锚定在 500ms，后续测量 10ms 也只能缓慢下拉。直接赋值让初始值无偏，随后平滑自然收敛到真实值。
+
+---
+
+### 13.10 write_state 超时 → k_failed → UAF 防护链
+
+当一个连接的 `write_state` 降级到 `STATE_WRITE_TIMEOUT` → `active() = false` → `_compute_ice_transport_state()`（`ice_transport_channel.cpp:324`）检测到"曾经有连接，现在全部 inactive" → 返回 `k_failed`：
+
+```cpp
+IceTransportState IceTransportChannel::_compute_ice_transport_state() {
+    bool has_connection = false;
+    for (auto conn : connections()) {
+        if (conn->active()) { has_connection = true; break; }
+    }
+    if (_had_connection && !has_connection) return IceTransportState::k_failed;  // ★
+    ...
+}
+```
+
+`k_failed` → `signal_ice_state_change` → `IceAgent::_update_state` → `signal_ice_state` → `TransportController::_on_ice_state` → `_update_state` → `k_failed` → `signal_connection_state` → `PeerConnection` → `RtcStream` → `on_connection_state(k_failed)` → `_remove_push_stream` → `delete push_stream` → `~RtcStream` → `_pc->destroy()`（10ms 延迟定时器）。
+
+**这正是 §12.4 讲的 UAF 防护场景**。整个析构链从 `_on_check_and_ping` → `_update_connection_states` → `conn->update_state` 的调用栈内触发。`PeerConnection::destroy()` 的 10ms 延迟保证 `_on_check_and_ping` 返回后不会访问已析构的 `_ice_controller`。
+
+---
+
+### 13.11 状态变化驱动的重排序路径
+
+非定时器驱动的重排序由两条路径触发：
+
+**路径 A — `_on_connection_state_change`**：
+
+```
+set_write_state / update_receiving → signal_state_change
+  → _on_connection_state_change
+    → _sort_connections_and_update_state
+      → sort_and_switch_connection (RTT 防抖切换)
+      → _update_state
+      → _maybe_start_pinging (已启动 → 跳过)
+```
+
+**路径 B — `_on_connection_destroyed`**：
+
+```
+IceConnection::destroy() → signal_connection_destroy
+  → _on_connection_destroyed
+    → 从 controller 清理 (connections + pinged + unpinged)
+    → 如果销毁的是 selected → _switch_selected_connection(nullptr) + 重排序
+    → _update_state (receiving 可能重算——销毁非 selected 连接后仍需重新判断)
+```
+
+路径 B 的 `_update_state` 很重要：`receiving` 看任意连接，销毁一个连接后可能从 `receiving=true` 变为 `false`，必须重新计算。
+
+---
+
+### 13.12 完整调用链总览
+
+```
+                                ═══ 冷启动 ═══
+
+UDP 收 STUN Binding Request
+  → UDPPort::_on_read_packet
+    → signal_unknown_address
+      → IceTransportChannel::_on_unknown_address
+        → port->create_connection(remote_candidate)       // new IceConnection
+        → _add_connection(conn)                           // 注册信号 + controller
+        → conn->handle_stun_binding_request(stun_msg)     // 回复 Binding Response
+        → _sort_connections_and_update_state
+          → sort_and_switch_connection()                  // 冷启动: 无 selected → 直接选
+          → _update_state()                               // writable + receiving 聚合
+          → _maybe_start_pinging()                        // 密码空 → 暂不启动
+
+ANSWER 到达
+  → set_remote_ice_params
+    → maybe_set_remote_ice_params (补填 password)
+    → _sort_connections_and_update_state
+      → _maybe_start_pinging()                            // 密码非空 → start_timer(48ms) ★
+
+
+                                ═══ 稳态循环 ═══
+
+libev timer (48ms / 480ms)
+  → ice_ping_cb
+    → _on_check_and_ping
+      ├─ _update_connection_states
+      │    └─ for each conn: conn->update_state(now)
+      │         ├─ WRITABLE → UNRELIABLE?  (>=5 次失败 && >5s)
+      │         ├─ UNRELIABLE/INIT → TIMEOUT?  (>15s 无回复)
+      │         └─ update_receiving(now)
+      │
+      ├─ select_connection_to_ping(last_ping - 5ms)
+      │    ├─ 定 ping_interval: _weak()? 或 need_ping_more? → 48ms : 480ms
+      │    ├─ Channel 门: now >= last_ping_sent_ms + ping_interval?
+      │    └─ _find_next_pingable_connection(now)
+      │         ├─ selected 优先? (writable && 过连接级间隔)
+      │         ├─ unpinged 无可 ping? → pinged 全部倒回 unpinged
+      │         ├─ _is_pingable 过滤 (凭据 + weak/间隔)
+      │         └─ _more_pingable 选最 overdue (last_ping_sent 最小)
+      │
+      ├─ _ping_connection(conn)
+      │    ├─ _last_ping_sent_ms = now              ← Channel 级时间戳
+      │    └─ conn->ping(now)
+      │         ├─ new ConnectionRequest (STUN Binding + transaction_id)
+      │         ├─ _pings_since_last_responses.push_back(SentPing)
+      │         ├─ _request_manager.send() → UDP socket
+      │         └─ _num_pings_sent++
+      │
+      ├─ mark_connection_pinged(conn)               ← unpinged → pinged
+      │
+      └─ 升降档: interval 变了? → 重启定时器
+
+
+                                ═══ 收到 STUN Binding Response ═══
+
+UDP 收包
+  → IceConnection::on_read_packet
+    → STUN_BINDING_RESPONSE case
+      → validate_message_integrity(_remote_candidate.password)
+      → _request_manager.check_response() → 按 transaction_id 匹配
+        → ConnectionRequest::on_request_response
+          → on_connection_request_response
+            → received_ping_response(rtt)
+              ├─ RTT 指数平滑 (old*0.75 + new*0.25)
+              ├─ _pings_since_last_responses.clear()
+              ├─ update_receiving → signal_state_change
+              ├─ set_write_state(STATE_WRITABLE) → signal_state_change
+              └─ set_state(SUCCEEDED)
+
+
+                                ═══ 状态变化触发重排序 ═══
+
+signal_state_change (由 set_write_state / update_receiving 发射)
+  → _on_connection_state_change
+    → _sort_connections_and_update_state
+      → sort_and_switch_connection()
+        ├─ stable_sort (5级比较 + RTT fallback)
+        ├─ top 不是 writable/UNRELIABLE 或 top == selected → 不切
+        ├─ 无 selected → 冷启动，直接选
+        └─ top RTT <= selected RTT - 10ms → 切换
+      → _update_state()
+      → _maybe_start_pinging()  (已启动 → 跳过)
+```
