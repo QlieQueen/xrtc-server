@@ -350,6 +350,8 @@ std::string SessionDescription::to_string() {
             ss << "a=rtcp-mux\r\n";
         }
 
+	ss << "a=extmap:12 http://www.webrtc.org/experiments/rtp-hdrext/abs-capture-time\r\n";
+
         //a=rtpmap:111 opus/48000/2
         //a=rtcp-fb:111 transport-cc
         //a=fmtp:111 minptime=10;useinbandfec=1
