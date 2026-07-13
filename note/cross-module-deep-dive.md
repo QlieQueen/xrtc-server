@@ -435,26 +435,29 @@ if (td) {
 
 **注意顺序**：先设 ICE 参数，再设 DTLS 指纹。`set_remote_ice_params` 会触发 `_sort_connections_and_update_state()`，可能首次满足 ping 条件并启动 ICE 连通性检查。
 
-### 3.3 ice-ufrag/pwd 的三个消费点
+### 3.3 ice-ufrag/pwd 的两把密码 + 各自消费点
 
-进入 `IceTransportChannel` 后存在 `_remote_ice_params` 成员（`src/ice/ice_transport_channel.cpp:75`）。三个消费时机：
+ICE 涉及**两把**密码，对称分工。规则见 §8.1："发给谁，就用谁的密码"。
 
-**消费点 ①：创建 prflx candidate 时给密码赋值**（`ice_transport_channel.cpp:162`）：
-```cpp
-remote_candidate.username = remote_ufrag;            // 对端 ufrag
-remote_candidate.password = _remote_ice_params.ice_pwd;  // 对端 ice-pwd
-```
-注意——STUN Binding Request 到达时 ANSWER 可能还没到，此时 `_remote_ice_params` 为空，password 为空字符串。需要等 ANSWER 到达后由 `maybe_set_remote_ice_params` 补填（见 §3.4）。
+**本地密码 `_ice_params.ice_pwd`（SFU 密码）**：
 
-**消费点 ②：决定是否可 ping**（`src/ice/ice_controller.cpp`）：
-`has_pingable_connection()` 检查 `_is_pingable()`，后者要求 `remote_candidate.password` 非空。只有 ANSWER 到达、`set_remote_ice_params` 把 pwd 补给已有连接后，连接才变为可 ping。**远端 ice-pwd 的真实作用是"连接级别的门控"——不是被用作 HMAC key（那是本地 ice-pwd 的职责），而是作为"ANSWER 已到达、对端身份已确认"的标志位。**
+| 消费点 | 场景 | 代码位置 |
+|--------|------|---------|
+| 验证客户端发来的 Binding Request | 收到 | `udp_port.cpp:195` — `validate_message_integrity(_ice_params.ice_pwd)` |
+| 构造发给客户端的 Binding Response | 发出 | `ice_connection.cpp:62` — `add_message_integrity(_port->ice_pwd())` |
 
-**消费点 ③：STUN Response 的 MESSAGE-INTEGRITY 验证**（`src/ice/ice_connection.cpp:124`）：
-```cpp
-// 验证对端发来的 STUN Binding Response
-stun_msg->validate_message_integrity(_remote_candidate.password);
-```
-这里用的是远端密码——对端用自己的密码签名，我们用远端密码验证。
+**远端密码 `_remote_ice_params.ice_pwd`（客户端密码）**：
+
+进入 `IceTransportChannel` 后存在 `_remote_ice_params` 成员（`ice_transport_channel.cpp:75`），随后通过 `maybe_set_remote_ice_params` 补填到已有连接的 `remote_candidate.password`（`ice_connection.cpp:309-315`）。消费点：
+
+| 消费点 | 场景 | 代码位置 |
+|--------|------|---------|
+| 分配给 `remote_candidate.password` | 创建 prflx 时赋值 | `ice_transport_channel.cpp:162` — 此时 ANSWER 可能未到，为空，需 §3.4 补填 |
+| ping 门控 | 判断 `_is_pingable()` | `ice_controller.cpp:183` — `remote.password` 非空 = ANSWER 已到 |
+| 构造发给客户端的 Binding Request (ping) | 发出 | `stun_request.cpp:131` — `add_message_integrity(remote_candidate().password)` |
+| 验证客户端发来的 Binding Response | 收到 | `ice_connection.cpp:124` — `validate_message_integrity(_remote_candidate.password)` |
+
+**注意**：之前说远端密码"不是 HMAC key，只是门控标志位"——这是错的。远端密码既做门控（`_is_pingable`），也做 HMAC key（ping 时构造 MI、收 response 时验证 MI）。"发给谁就用谁的密码"——发给客户端时用客户端密码，正是远端密码。
 
 ### 3.4 密码的"先有鸡还是先有蛋"问题
 
@@ -760,90 +763,105 @@ void AsyncUdpSocket::recv_data() {
 
 ## 7. 完整生命周期时间线
 
+### Phase 1 — 媒体栈诞生 (set_local_description)
+
 ```mermaid
 sequenceDiagram
     participant Client as 客户端
     participant Sig as SignalingWorker
     participant Rtc as RtcWorker
+
+    Client->>Sig: PUSH (TCP xhead+JSON)
+    Sig->>Rtc: RtcMsg, CRC32 路由
+    Rtc->>Rtc: create_push_stream, create_offer
+    Note over Rtc: 随机生成 ice-ufrag + ice-pwd
+    Rtc->>Rtc: set_local_description()
+    Note over Rtc: create IceTransportChannel<br/>create DtlsTransport(channel)<br/>create DtlsSrtpTransport<br/>信号订阅连接
+    Rtc->>Rtc: gathering_candidate()
+    Note over Rtc: socket()+bind()+O_NONBLOCK ★<br/>AsyncUdpSocket 包裹 ★<br/>signal_read_packet → UDPPort ★
+    Rtc-->>Sig: SDP offer 回程
+    Sig-->>Client: SDP offer (JSON response)
+```
+
+### Phase 2 — 远端信息注入 (set_remote_description)
+
+```mermaid
+sequenceDiagram
+    participant Client as 客户端
+    participant Sig as SignalingWorker
+    participant Rtc as RtcWorker
+
+    Client->>Sig: ANSWER (TCP)
+    Sig->>Rtc: RtcMsg, set_answer
+    Rtc->>Rtc: set_remote_sdp(answer)
+    Note over Rtc: 解析 SDP: ice-ufrag, ice-pwd, fingerprint
+    Note over Rtc: set_remote_ice_params()<br/>补填 _remote_candidate.password ★
+    Note over Rtc: set_remote_fingerprint()<br/>SetPeerCertificateDigest()
+    Note over Rtc: _maybe_start_pinging()<br/>启动 48ms 定时器 ★
+```
+
+### Phase 3 — ICE 连通性检查
+
+```mermaid
+sequenceDiagram
+    participant Client as 客户端
+    participant ICE as IceTransportChannel
+
+    loop 48ms 定时器
+        ICE->>ICE: _on_check_and_ping()
+        Note over ICE: _update_connection_states()<br/>select_connection_to_ping()
+        ICE->>Client: STUN Binding Request (UDP)
+        Client->>ICE: STUN Binding Response
+        Note over ICE: MI 校验<br/>received_ping_response(rtt)<br/>set_write_state(WRITABLE) ★
+    end
+```
+
+### Phase 4 — DTLS 握手
+
+```mermaid
+sequenceDiagram
+    participant Client as 客户端
     participant ICE as IceTransportChannel
     participant DTLS as DtlsTransport
+
+    ICE->>DTLS: signal_writable_state_change ★
+    DTLS->>DTLS: _maybe_start_dtls()
+    Note over DTLS: StartSSL, k_connecting<br/>重放 _catched_client_hello
+    DTLS->>Client: DTLS 握手包 (UDP)
+    Client->>DTLS: DTLS 握手包
+    Note over DTLS: StreamInterfaceChannel 桥接<br/>signal_read_packet → BufferQueue<br/>SignalEvent(SE_READ) → OpenSSL
+    Note over DTLS: _on_dtls_event(SE_OPEN)<br/>_set_dtls_state(k_connected) ★
+```
+
+### Phase 5 — SRTP 密钥安装
+
+```mermaid
+sequenceDiagram
+    participant DTLS as DtlsTransport
+    participant SRTP as DtlsSrtpTransport
+
+    DTLS->>SRTP: signal_dtls_state(k_connected) ★
+    SRTP->>SRTP: _maybe_setup_dtls_srtp()
+    Note over SRTP: SSL_export_keying_material<br/>send_key = server_write_key + server_salt<br/>recv_key = client_write_key + client_salt
+    Note over SRTP: set_rtp_params()<br/>send_session.set_send()<br/>recv_session.set_recv() ★ SRTP active!
+```
+
+### Phase 6 — RTP 流转发
+
+```mermaid
+sequenceDiagram
+    participant Client as 推流客户端
     participant SRTP as DtlsSrtpTransport
     participant Mgr as RtcStreamManager
+    participant Pull as 拉流端
 
-    rect rgb(240, 248, 255)
-        Note over Client, Mgr: PHASE 1 — 媒体栈诞生 (set_local_description)
-
-        Client->>Sig: PUSH (TCP xhead+JSON)
-        Sig->>Rtc: RtcMsg → CRC32 路由
-        Rtc->>Rtc: create_push_stream → create_offer
-        Note over Rtc: 随机生成 ice-ufrag + ice-pwd
-        Rtc->>Rtc: set_local_description()
-        Rtc->>ICE: create IceTransportChannel + set_ice_params
-        Rtc->>DTLS: create DtlsTransport(channel)<br/>订阅 signal_read_packet<br/>订阅 signal_writable_state_change
-        Rtc->>SRTP: create DtlsSrtpTransport<br/>set_dtls_transport(dtls)<br/>订阅 signal_dtls_state
-        Rtc->>ICE: gathering_candidate()
-        Note over ICE: socket() + bind() + O_NONBLOCK<br/>AsyncUdpSocket 包裹 ★<br/>signal_read_packet → UDPPort._on_read_packet ★
-        ICE-->>Rtc: signal_candidate_allocate_done → SDP offer
-        Rtc-->>Sig: SDP offer 回程
-        Sig-->>Client: SDP offer (JSON response)
-    end
-
-    rect rgb(255, 248, 240)
-        Note over Client, Mgr: PHASE 2 — 远端信息注入 (set_remote_description)
-
-        Client->>Sig: ANSWER (TCP)
-        Sig->>Rtc: RtcMsg → set_answer
-        Rtc->>Rtc: set_remote_sdp(answer)
-        Note over Rtc: 解析 SDP → TransportDescription<br/>ice-ufrag / ice-pwd / fingerprint
-        Rtc->>ICE: set_remote_ice_params()<br/>补填 _remote_candidate.password ★
-        Rtc->>DTLS: set_remote_fingerprint()<br/>SetPeerCertificateDigest()
-        Note over ICE: _maybe_start_pinging()<br/>启动 48ms 定时器 ★
-    end
-
-    rect rgb(240, 255, 240)
-        Note over Client, Mgr: PHASE 3 — ICE 连通性检查
-
-        loop 48ms 定时器
-            ICE->>ICE: _on_check_and_ping()<br/>_update_connection_states()<br/>select_connection_to_ping()
-            ICE->>Client: STUN Binding Request (UDP)
-            Client->>ICE: STUN Binding Response
-            Note over ICE: MI 校验 → received_ping_response(rtt)<br/>set_write_state(STATE_WRITABLE) ★
-        end
-    end
-
-    rect rgb(255, 240, 255)
-        Note over Client, Mgr: PHASE 4 — DTLS 握手
-
-        ICE->>DTLS: signal_writable_state_change
-        DTLS->>DTLS: _maybe_start_dtls() → StartSSL → k_connecting<br/>重放 _catched_client_hello
-        DTLS->>ICE: StreamInterfaceChannel.Write()
-        ICE->>Client: DTLS 握手包 (UDP)
-        Client->>ICE: DTLS 握手包
-        ICE->>DTLS: BufferQueue → SignalEvent(SE_READ) → OpenSSL Read()
-        Note over DTLS: _on_dtls_event(SE_OPEN)<br/>_set_dtls_state(k_connected) ★
-    end
-
-    rect rgb(240, 255, 255)
-        Note over Client, Mgr: PHASE 5 — SRTP 密钥安装
-
-        DTLS->>SRTP: signal_dtls_state(k_connected)
-        SRTP->>SRTP: _maybe_setup_dtls_srtp()
-        Note over SRTP: SSL_export_keying_material<br/>→ send_key = server_write_key + server_salt<br/>→ recv_key = client_write_key + client_salt<br/>set_rtp_params() ★ SRTP active!
-    end
-
-    rect rgb(255, 255, 240)
-        Note over Client, Mgr: PHASE 6 — RTP 流转发
-
-        Client->>ICE: SRTP RTP (UDP)
-        ICE->>DTLS: signal_read_packet
-        DTLS->>SRTP: signal_read_packet
-        SRTP->>SRTP: unprotect_rtp() 解密
-        SRTP->>Mgr: signal_rtp_packet_received
-        Mgr->>Mgr: on_rtp_packet_received<br/>→ pull_stream->send_rtp()
-        Note over Mgr: protect_rtp() 加密 → DtlsTransport<br/>→ ICE → UDP → 拉流端
-        Note over Client, Mgr: RTCP 双向: push ↔ pull (PLI + SR)
-    end
-
+    Client->>SRTP: SRTP RTP (UDP)
+    SRTP->>SRTP: unprotect_rtp() 解密
+    SRTP->>Mgr: signal_rtp_packet_received
+    Mgr->>Mgr: on_rtp_packet_received
+    Note over Mgr: k_push → _find_pull_stream<br/>→ pull_stream.send_rtp()
+    Mgr->>Pull: protect_rtp() 加密 → ICE → UDP
+    Note over Client, Pull: RTCP 双向: push ↔ pull (PLI + SR)
 ```
 
 ---
