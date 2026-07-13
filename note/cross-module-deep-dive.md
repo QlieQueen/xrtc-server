@@ -15,6 +15,9 @@
 7. [完整生命周期时间线](#7-完整生命周期时间线)
 8. [你应该知道但可能没问的问题](#8-你应该知道但可能没问的问题)
 9. [证书体系：HTTPS + DTLS 双层认证](#9-证书体系https--dtls-双层认证)
+10. [PULL 流 + SSRC 透传](#10-pull-流--ssrc-透传)
+11. [RTP/RTCP 数据包处理](#11-rtprtcp-数据包处理)
+12. [STOP 与资源清理链](#12-stop-与资源清理链)
 
 ---
 
@@ -1108,3 +1111,320 @@ RFC 8122 将这种模式称为 "Certificate Fingerprint"——SDP 中携带的 f
 | DTLS (客户端) | libwebrtc | 1/PeerConnection | libwebrtc 自动生成 | SDP answer fingerprint | HTTPS 信道 | DTLS 握手 + SRTP 密钥 |
 
 **两层认证，三份证书**：HTTPS（证书 ①）保护信令面的 SDP 交换 → SDP 中的 fingerprint 成为媒体面的信任锚 → DTLS 握手（证书 ②+③）通过 fingerprint 比对完成双方身份认证 → 握手主密钥派生 SRTP 加密密钥。
+
+---
+
+## 10. PULL 流 + SSRC 透传
+
+PushStream 和 PullStream 是两个完全独立的媒体栈实例，各有一套 ICE/DTLS/SRTP。两者的连接点只在 `RtcStreamManager`——它从 push 端提取 SSRC 注入 pull 端 offer，并在运行时做 RTP/RTCP 应用层转发。
+
+### 10.1 创建流程
+
+```
+SignalingWorker::_process_pull()
+  → g_rtc_server->send_rtc_msg(msg)
+    → CRC32(stream_name) 路由到同一 RtcWorker
+      → RtcWorker::_process_pull()
+        → RtcStreamManager::create_pull_stream()
+```
+
+`create_pull_stream()` 内部五步（`rtc_stream_manager.cpp:52-82`）：
+
+```cpp
+// ① 查找已有 PushStream
+PushStream* push_stream = _find_push_stream(stream_name);
+if (!push_stream) return -1;  // 没推流就拉不了
+
+// ② 从 push 的 remote SDP 提取 SSRC
+std::vector<StreamParams> audio_source, video_source;
+push_stream->get_audio_source(audio_source);
+push_stream->get_video_source(video_source);
+
+// ③ 移除旧的 pull（同一 stream_name 只有一个）
+_remove_pull_stream(uid, stream_name);
+
+// ④ 新建 PullStream，注入 push 的 SSRC
+PullStream* stream = new PullStream(_el, _allocator.get(), uid, stream_name, ...);
+stream->add_audio_source(audio_source);
+stream->add_video_source(video_source);
+stream->start(certificate);
+
+// ⑤ 生成带 SSRC 的 offer，存 map
+offer = stream->create_offer();
+_pull_streams[stream_name] = stream;
+```
+
+### 10.2 PushStream 如何提取 SSRC
+
+`push_stream.cpp:36-61`——`get_audio_source()` / `get_video_source()` 委托给 `_get_source(mid, source)`：
+
+```cpp
+auto remote_desc = _pc->remote_desc();      // push 端收到 answer 后存入的
+auto content = remote_desc->get_content(mid); // "audio" / "video"
+source = content->streams();                 // vector<StreamParams>
+```
+
+`StreamParams`（`pc/stream_params.h`）承载：
+
+```cpp
+struct StreamParams {
+    std::string id;                     // track id
+    std::vector<uint32_t> ssrcs;        // 推流端真实 SSRC
+    std::vector<SsrcGroup> ssrc_groups; // FID 等分组
+    std::string cname;                  // CNAME
+    std::string stream_id;              // msid
+};
+```
+
+这些数据来自 push 客户端 ANSWER SDP 的 `a=ssrc:` 行解析（`peer_connection.cpp:215-273` 的 `parse_ssrc_info()`）。
+
+### 10.3 PullStream 的 offer 怎么用这些 SSRC
+
+```cpp
+// pull_stream.cpp:22-33
+options.send_audio = _audio;     // sendonly
+options.recv_audio = false;
+options.send_video = _video;
+options.recv_video = false;
+```
+
+`PeerConnection::create_offer()` 对 `send` 方向（line 115-119, 127-133）：
+
+```cpp
+if (options.send_audio) {
+    for (auto stream : _audio_source) {       // push 端的 SSRC
+        audio->add_stream(stream);            // 注入到 SDP m=audio section
+    }
+}
+```
+
+SDP 序列化（`session_description.cpp:252`）写出 push 端原始 SSRC：
+
+```
+a=ssrc-group:FID 67890 67891
+a=ssrc:67890 cname:clientVideoCname
+a=ssrc:67890 msid:stream1 video_track
+```
+
+**关键约束**：SFU 不转码，只做 SRTP 解密→重加密。SSRC 是 RTP 包头核心标识，一旦改写，拉流端无法把收到的 RTP 与 SDP 声明的流对应。
+
+### 10.4 PushStream vs PullStream 对比
+
+| 维度 | PushStream | PullStream |
+|------|-----------|-----------|
+| SDP direction | `a=recvonly` | `a=sendonly` |
+| offer 中 SSRC | 无 | push 端的原始 SSRC |
+| send_audio/video | false | true |
+| recv_audio/video | true | false |
+| 数据方向 | 从 push 客户端接收 | 发送给 pull 客户端 |
+| 媒体栈 | 独立 ICE/DTLS/SRTP | 独立 ICE/DTLS/SRTP |
+
+---
+
+## 11. RTP/RTCP 数据包处理
+
+### 11.1 两级解复用
+
+```
+UDP 收包 → DtlsTransport (第一级) → DtlsSrtpTransport (第二级)
+             DTLS vs 非 DTLS            RTP vs RTCP
+```
+
+**第一级**——`DtlsTransport::_on_read_packet()`（`dtls_transport.cpp:176-233`）：
+
+| 判断 | 条件 | 去向 |
+|------|------|------|
+| DTLS | `len >= 13 && buf[0] 在 20..63` | OpenSSL |
+| RTP/RTCP | `len >= 12 && (buf[0] & 0xC0) == 0x80` 且 DTLS 已 connected | `signal_read_packet` 上交 |
+
+- DTLS ContentType: 20=ChangeCipherSpec, 21=Alert, 22=Handshake, 23=ApplicationData
+- RTP version bits (byte0 高 2 位) = 2 (二进制 `10`) —— SRTP 加密后版本位仍可见
+
+**第二级**——`DtlsSrtpTransport::_on_read_packet()`（`dtls_srtp_transport.cpp:104-120`）调用 `infer_rtp_packet_type()`：
+
+```cpp
+// rtp_utils.cpp: infer_rtp_packet_type()
+RtpPacketType infer_rtp_packet_type(ArrayView<const char> packet) {
+    // ① 先检查 RTP
+    if (is_rtp_packet(packet)) return k_rtp;
+    // ② 再检查 RTCP
+    if (is_rtcp_packet(packet)) return k_rtcp;
+    // ③ 都不是
+    return k_unknown;
+}
+
+// is_rtp_packet: len>=12 && version==2 && PT 不在 [64,96)
+// is_rtcp_packet: len>=4 && (buf[1] & 0x7F) 在 [64,96)
+```
+
+**PT 区分规则**（RFC 5761）：byte1 的低 7 位在 [64,96) 为 RTCP 保留范围，其余为 RTP。
+
+### 11.2 解密与转发链
+
+```
+DtlsSrtpTransport::_on_read_packet()
+  ├─ k_rtp → _on_rtp_packet_received()
+  │           ├─ unprotect_rtp() 原地解密，剥离尾部 auth tag
+  │           └─ signal_rtp_packet_received → TransportController → PeerConnection
+  │
+  └─ k_rtcp → _on_rtcp_packet_received()
+               ├─ unprotect_rtcp() 原地解密，剥离 SRTCP index + auth tag
+               └─ signal_rtcp_packet_received → TransportController → PeerConnection
+```
+
+`SrtpSession` 方向隔离（`srtp_transport.cpp`）：
+
+| Session | 职责 | libsrtp 方向 |
+|---------|------|-------------|
+| `_send_session` | 加密发出 | `ssrc_any_outbound`，只允许 `protect_rtp/protect_rtcp` |
+| `_recv_session` | 解密收到 | `ssrc_any_inbound`，只允许 `unprotect_rtp/unprotect_rtcp` |
+
+### 11.3 RtcStreamManager 转发逻辑
+
+```cpp
+// rtc_stream_manager.cpp:193-214
+
+// RTP: push → pull 单向
+void on_rtp_packet_received(stream, data, len) {
+    if (k_push == stream->type()) {
+        PullStream* pull = _find_pull_stream(stream->stream_name());
+        if (pull) pull->send_rtp(data, len);
+    }
+}
+
+// RTCP: 双向
+void on_rtcp_packet_received(stream, data, len) {
+    if (k_push == stream->type()) {
+        PullStream* pull = _find_pull_stream(stream->stream_name());
+        if (pull) pull->send_rtcp(data, len);    // push 的 RR/PLI → pull
+    } else if (k_pull == stream->type()) {
+        PushStream* push = _find_push_stream(stream->stream_name());
+        if (push) push->send_rtcp(data, len);    // pull 的 PLI → push (请求 I 帧)
+    }
+}
+```
+
+**RTCP 双向的必要性**：拉流端发 PLI（Picture Loss Indication）请求 I 帧，必须到达推流端；推流端发 SR（Sender Report）让拉流端做音视频同步。
+
+### 11.4 发包路径
+
+```
+pull_stream->send_rtp(data, len)
+  → PeerConnection::send_rtp()                   // hardcoded mid="audio"
+    → TransportController::send_rtp("audio", ...)
+      → DtlsSrtpTransport::send_rtp()
+        ├─ get_send_auth_tag_len() 预留 auth tag
+        ├─ protect_rtp() SRTP 加密
+        └─ _rtp_dtls_transport->send_packet()
+            → DtlsTransport::send_packet()       // 直接走 ICE，不经过 DTLS 加密
+              → IceTransportChannel::send_packet()
+                → _selected_connection->send_packet()
+                  → UDPPort::send_to() → UDP socket
+```
+
+---
+
+## 12. STOP 与资源清理链
+
+### 12.1 两个清理入口
+
+| 入口 | 触发条件 | 调用栈 |
+|------|---------|--------|
+| `on_connection_state(k_failed)` | ICE/DTLS 状态机检测到失败 | 在 ICE ping timer 回调栈内 |
+| `on_stream_exception()` | 30 秒 ICE 超时定时器触发 | 独立 timer 回调，不在 ping 栈内 |
+
+两者都会调用 `_remove_push_stream(stream)` / `_remove_pull_stream(stream)`，收敛到同一个 `delete` 路径。
+
+### 12.2 UID 校验 + delete
+
+```cpp
+void RtcStreamManager::_remove_push_stream(uint64_t uid, const string& stream_name) {
+    PushStream* push_stream = _find_push_stream(stream_name);
+    if (push_stream && uid == push_stream->get_uid()) {
+        _push_streams.erase(stream_name);   // 先从 map 移除
+        delete push_stream;                  // 再销毁
+    }
+}
+```
+
+### 12.3 析构瀑布
+
+`delete push_stream` 触发的完整析构路径：
+
+```
+~PushStream()                                       // 日志
+  → ~RtcStream()
+    ├─ delete_timer(_ice_timeout_watcher)           // 取消 30s 超时
+    └─ _pc->destroy()                               // ★ 不直接 delete
+
+_pc->destroy():
+  → create_timer(destroy_timer_cb, 10ms)            // 一次性定时器
+  → return                                          // 当前栈退出
+
+[10ms 后，事件循环空闲]
+destroy_timer_cb():
+  → delete pc
+
+~PeerConnection():                                   // private 析构
+  → ~unique_ptr<TransportController>
+
+~TransportController():
+  ├─ for each DtlsSrtpTransport: delete
+  │    → ~SrtpTransport()
+  │      ├─ reset _send_session (SrtpSession)       // libsrtp 发送 session
+  │      └─ reset _recv_session (SrtpSession)       // libsrtp 接收 session
+  ├─ for each DtlsTransport: delete
+  │    → ~SSLStreamAdapter()                         // OpenSSL DTLS 上下文
+  └─ delete _ice_agent
+
+~IceAgent():
+  → for each IceTransportChannel: delete
+
+~IceTransportChannel():
+  ├─ delete_timer(_ping_watcher)                     // 停 ping 定时器
+  ├─ for each IceConnection: conn->destroy()
+  │    → signal_connection_destroy → IceController 清理引用
+  │    → delete this
+  ├─ for each UDPPort: delete port
+  │    ~UDPPort():
+  │      ├─ close(_socket)                           // ★ 关闭 UDP socket fd
+  │      └─ ~AsyncUdpSocket()
+  │           ├─ delete_io_event(_socket_watcher)    // 从 libev 移除
+  │           └─ delete[] _buf                       // 释放 1500 字节缓冲
+  └─ _ice_controller.reset()                         // unique_ptr 销毁
+```
+
+### 12.4 为什么需要 10ms 延迟析构
+
+```
+ICE ping timer (48ms) → _on_check_and_ping()
+  → _update_connection_states()
+    → conn->update_state(now)
+      → set_write_state(STATE_WRITE_TIMEOUT)
+        → signal_state_change
+          → _on_connection_state_change
+            → _sort_connections_and_update_state
+              → _compute_ice_transport_state → k_failed
+                → signal_ice_state_change
+                  → IceAgent::_update_state → signal_ice_state
+                    → TransportController::_on_ice_state → _update_state → k_failed
+                      → signal_connection_state → PeerConnection → RtcStream
+                        → _listener->on_connection_state(k_failed)
+                          → _remove_push_stream → delete push_stream
+                            → ~RtcStream → _pc->destroy()
+                              → create_timer(10ms) → return
+  ← 回到 _on_check_and_ping()                        ★ 如果没有延迟，_ice_controller 已被 delete！
+  → _ice_controller->select_connection_to_ping()     ★ nullptr dereference → coredump
+```
+
+**10ms**：足够当前 event loop 迭代完成并返回 libev，但人眼无感知。`~PeerConnection()` 设为 private + `destroy_timer_cb` 为 friend，编译期强制走延迟析构路径。
+
+### 12.5 STOP 命令 vs 异常清理对比
+
+| 维度 | STOP_PUSH / STOP_PULL | on_connection_state(k_failed) | on_stream_exception |
+|------|----------------------|------------------------------|-------------------|
+| 触发 | 客户端主动发 STOP | ICE 连接全断 | 30s 超时 |
+| 调用链 | SignalingWorker → RtcServer → RtcWorker | ICE ping timer 回调栈内 | 独立 timer |
+| 响应 | 返回 JSON `{errno:0}` | 无响应 | 无响应 |
+| UID 校验 | 有（外部传入） | 有（从 stream 对象取） | 有（从 stream 对象取） |
+| 收敛点 | `_remove_push/pull_stream(uid, name)` | `_remove_push/pull_stream(stream)` | `_remove_push/pull_stream(stream)` |
