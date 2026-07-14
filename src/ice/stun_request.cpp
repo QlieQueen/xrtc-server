@@ -94,6 +94,10 @@ ConnectionRequest::ConnectionRequest(IceConnection* connection) :
 // ConnectionRequest::prepare — 填充 STUN Binding Request 属性
 //
 // 构造一个完整的连通性检查请求，采用积极提名策略 (每包都带 USE-CANDIDATE):
+// TODO: 改为 Regular Nomination — 只对 selected connection 的 ping 带 USE-CANDIDATE，
+//       探活其他 candidate pair 的 ping 不带。当前 Aggressive Nomination 在单网口
+//       场景下无实际影响（仅 1 个 IceConnection），多网卡时会导致客户端被探活 ping
+//       误导切到非 selected 的 pair。
 //   1. TYPE: STUN_BINDING_REQUEST (0x0001)
 //   2. USERNAME: remote_ufrag:local_ufrag (对端在前)
 //   3. ICE_CONTROLLING: tiebreaker = 0 (xrtc-server 始终 controlling，无角色冲突)

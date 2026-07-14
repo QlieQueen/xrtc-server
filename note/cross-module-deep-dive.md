@@ -324,6 +324,136 @@ int IceTransportChannel::send_packet(const char* data, size_t len) {
 
 所有 IceConnection 共享同一个物理 socket，但独立的状态决定了：哪个连接被选中发数据、哪个连接已失效需要淘汰。DTLS 握手、SRTP 加解密、RTP 转发最终都通过**那一个** `_selected_connection` 的 `send_packet()` 发出，通过 `on_read_packet()` → `signal_read_packet` 收进来。
 
+### 1.7 ICE ping 定时器的冷启动条件
+
+`IceTransportChannel` 持有一个周期性定时器（`_ping_watcher`），周期在 48ms/480ms 之间自适应。冷启动的唯一门控是 `_maybe_start_pinging()`（`ice_transport_channel.cpp:414-428`）：
+
+```cpp
+void IceTransportChannel::_maybe_start_pinging() {
+    if (_start_pinging) return;  // 已启动，跳过
+
+    if (_ice_controller->has_pingable_connection()) {
+        _el->start_timer(_ping_watcher, _cur_ping_interval * 1000);
+        _start_pinging = true;
+    }
+}
+```
+
+`has_pingable_connection()` → `_is_pingable()` 要求 `remote_candidate` **同时具备** username 和 password（`ice_controller.cpp:181-186`）：
+
+```cpp
+if (remote.username.empty() || remote.password.empty()) {
+    return false;
+}
+```
+
+两把凭据的来源和时序：
+
+| 凭据 | 何时填入 | 来源 |
+|------|---------|------|
+| `remote_candidate.username` | STUN Binding Request 解析成功 | USERNAME 属性中提取的 `remote_ufrag` |
+| `remote_candidate.password` | ANSWER 到达后补填 | `set_remote_ice_params()` → `maybe_set_remote_ice_params()` |
+
+**冷启动条件 = 至少一个 IceConnection 同时具备 ufrag（来自 STUN）和 password（来自 ANSWER）**。
+
+`_maybe_start_pinging()` 在两个地方被调用，**谁后到谁触发**：
+
+```
+路径 A — STUN 先到，ANSWER 后到:
+  STUN Request → _on_unknown_address → _add_connection
+    → _sort_connections_and_update_state → _maybe_start_pinging()
+    → password 为空, has_pingable_connection() = false → 跳过
+
+  ANSWER 到 → set_remote_ice_params() → maybe_set_remote_ice_params()
+    → 补填 password → _sort_connections_and_update_state
+    → _maybe_start_pinging()
+    → username+password 都到位 ★ 启动!
+
+路径 B — ANSWER 先到，STUN 后到:
+  ANSWER → _remote_ice_params 写入, 此时还没有 connection → 跳过
+
+  STUN Request → _on_unknown_address
+    → remote_candidate.password = _remote_ice_params.ice_pwd (已在 ANSWER 中填入)
+    → 创建时密码就已经非空 → _add_connection
+    → _sort_connections_and_update_state → _maybe_start_pinging() ★ 启动!
+```
+
+`_start_pinging` 保证只启动一次。
+
+### 1.8 定时器的三职责 + 两层限速
+
+`IceTransportChannel` 持有的定时器不止发 ping——它是整个 ICE 状态机的**心跳驱动**。`_on_check_and_ping()`（`ice_transport_channel.cpp:448-465`）每个周期做三件事：
+
+```cpp
+void IceTransportChannel::_on_check_and_ping() {
+    _update_connection_states();                          // ① 巡检所有连接
+    auto result = _ice_controller->select_connection_to_ping(...); // ② 选 ping 目标
+    if (result.conn) _ping_connection(conn);             // ③ 发 ping
+    // interval 变化 → 重启定时器
+}
+```
+
+**① `_update_connection_states()`**——遍历所有连接调 `conn->update_state(now)`，检测 ping 超时 → 降级 write_state（WRITABLE → UNRELIABLE → TIMEOUT）。状态变化时 `signal_state_change` → 触发 `_on_connection_state_change` → `_sort_connections_and_update_state` → `sort_and_switch_connection()` **可能切换 selected connection**。
+
+**② `select_connection_to_ping()`**——Channel 级 + Connection 级两层限速，选本轮应该 ping 的候选对。
+
+**③ `_ping_connection(conn)`**——对选中的候选对发出 STUN Binding Request，验证可达性。
+
+```
+每个定时器周期:
+  ① 巡检所有连接 → 超时的降级/淘汰
+  ② 连接状态变化 → 信号上报 → 可能触发 selected 切换
+  ③ 选一个候选对发 ping → 验证可达性
+  ④ 根据 weak/strong 调整定时器频率
+```
+
+以下详述步骤②中的两层限速设计。定时器周期是所有候选对的"最小分辨率"：**通道稳定时加大周期省带宽，不稳定时缩小周期尽快收敛到最优**。
+
+**第一层 — Channel 级**（`ice_controller.cpp:224-225`）：
+
+```cpp
+int ping_interval = (_weak() || need_ping_more_at_weak)
+    ? WEAK_PING_INTERVAL    // 48ms
+    : STRONG_PING_INTERVAL; // 480ms
+```
+
+`_weak()` = 没有 selected_connection，或者 selected 不满足 writable && receiving。`need_ping_more_at_weak` = 存在 ping 未满 3 次的连接（新连接快速初探）。
+
+**第二层 — Connection 级**（`ice_controller.cpp:335-347`）：
+
+| 条件 | 间隔 | 含义 |
+|------|------|------|
+| `< 3 次 ping` | 48ms | 新连接，快速摸清质量 |
+| channel weak 或连接不稳定 | 900ms | 中等频率 |
+| channel strong 且连接稳定 | 2500ms | 低频保活 |
+
+**两层同时满足才真发包**：
+
+```
+定时器 48ms 触发 → _on_check_and_ping()
+  → select_connection_to_ping()
+    → _find_next_pingable_connection()
+      → _is_pingable 过滤：
+        Channel 级: now >= last_ping_sent_ms + 48ms  ← 定时器已保证
+        Connection 级: now >= conn.last_ping_sent + 2500ms ← 稳定连接未到间隔
+      → 跳过 → 本轮不发包
+```
+
+**自适应调速器的本质**：
+
+```
+定时器周期 = 所有候选对的"最小分辨率"
+  │
+  ├─ weak 时 48ms: 高频探测, 每 48ms 至少 ping 一个 pair, 快速收敛到最优
+  └─ strong 时 480ms: 低频, 已经选出来了, 不需要频繁换
+
+Connection 级在此基础上进一步限速:
+  weak 时: timer=48ms, 新连接 conn_interval=48ms → 每 48ms 一个
+  strong 时: timer=480ms, 稳定连接 conn_interval=2500ms → 实际每 2500ms 才 ping 一次
+```
+
+**已知问题**：当前采用 Aggressive Nomination——每包 ping 都带 USE-CANDIDATE（`stun_request.cpp:120`），包括轮询探活其他 pair 的 ping。这会导致客户端被探活 ping "误导"切到非 selected 的 pair。正确做法是 Regular Nomination：只有 selected connection 的 ping 才带 USE-CANDIDATE。单网口场景下无实际影响（仅 1 个 IceConnection），多网卡时需修复。代码已标记 TODO。
+
 ---
 
 ## 2. 同一个 UDP socket 如何服务三层协议
