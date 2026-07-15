@@ -94,6 +94,7 @@ void IceConnection::on_read_packet(const char* buf, size_t len, int64_t ts) {
     const Candidate& remote = _remote_candidate;
     if (!_port->get_stun_message(buf, len, remote.address, &stun_msg, &remote_ufrag)) {
         // 这个不是stun包，可能是其他的，比如dtls或者rtp包
+        _last_data_received = rtc::TimeMillis();
         signal_read_packet(this, buf, len, ts);
     } else if (!stun_msg) {
 
@@ -112,6 +113,7 @@ void IceConnection::on_read_packet(const char* buf, size_t len, int64_t ts) {
                     RTC_LOG(LS_INFO) << to_string() << ": Received "
                         << stun_method_to_string(stun_msg->type())
                         << " id=" << rtc::hex_encode(stun_msg->transaction_id());
+                    _last_ping_received = rtc::TimeMillis();
                     handle_stun_binding_request(stun_msg.get());
                 }
                 break;
