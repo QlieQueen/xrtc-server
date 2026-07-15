@@ -224,7 +224,7 @@ PingResult IceController::select_connection_to_ping(int64_t last_ping_sent_ms) {
     int ping_interval = (_weak() || need_ping_more_at_weak) ? WEAK_PING_INTERVAL
         : STRONG_PING_INTERVAL;
 
-    int now = rtc::TimeMillis();
+    int64_t now = rtc::TimeMillis();
     const IceConnection* conn = nullptr;
     // Channel 级速率门: 距离上次 ping 过去了 >= 当前所需间隔才进入连接选择
     if (now >= last_ping_sent_ms + ping_interval) {
