@@ -268,7 +268,8 @@ void IceConnection::update_state(int64_t now) {
         RTC_LOG(LS_INFO) << to_string() << ": Timeout after "
             << now - _pings_since_last_responses[0].sent_time
             << "ms without a response";
-        set_write_state(STATE_WRITE_TIMEOUT);        
+        set_write_state(STATE_WRITE_TIMEOUT);
+        fail_and_destroy();
     }
 
     update_receiving(now);
