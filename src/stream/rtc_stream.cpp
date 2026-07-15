@@ -29,7 +29,8 @@ void RtcStream::_on_connection_state(PeerConnection*, PeerConnectionState state)
         << " to " << state;
     _state = state;
 
-    if (_state == PeerConnectionState::k_connected) {
+    if (_state == PeerConnectionState::k_connected
+            || _state == PeerConnectionState::k_failed) {
         if (_ice_timeout_watcher) {
             _el->delete_timer(_ice_timeout_watcher);
             _ice_timeout_watcher = nullptr;
