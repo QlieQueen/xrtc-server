@@ -454,6 +454,159 @@ Connection 级在此基础上进一步限速:
 
 **已知问题**：当前采用 Aggressive Nomination——每包 ping 都带 USE-CANDIDATE（`stun_request.cpp:120`），包括轮询探活其他 pair 的 ping。这会导致客户端被探活 ping "误导"切到非 selected 的 pair。正确做法是 Regular Nomination：只有 selected connection 的 ping 才带 USE-CANDIDATE。单网口场景下无实际影响（仅 1 个 IceConnection），多网卡时需修复。代码已标记 TODO。
 
+### 1.9 ICE 状态机：从 IceConnection 到 IceTransportChannel 到 IceAgent
+
+ICE 状态机分四层，每层聚合上一层的信息。
+
+**第一层：IceConnection —— 单个候选对的三维状态**
+
+一个 `IceConnection` 代表一个 UDP 四元组（候选对），跟踪三个独立维度：
+
+*Candidate Pair State（RFC 5245）*：
+
+```
+WAITING → IN_PROGRESS (发 ping) → SUCCEEDED (收到回复)
+       → FAILED → destroy()
+```
+
+实际用处不大，更多是 RFC 合规。真正驱动上层行为的是下面两个。
+
+*Write State —— "我们→对端"方向*：
+
+```
+INIT(2) ──收到ping response──→ WRITABLE(0)
+          ──5个连续超时 + 等5s──→ UNRELIABLE(1)
+          ──等15s──→ TIMEOUT(3)
+```
+
+升级在 `received_ping_response()` 中（收到 ping 响应直接跳到 WRITABLE），退化在 `update_state(now)` 中（`ice_connection.cpp:244-273`）：
+
+| 退化阶段 | 条件 | 阈值 |
+|---------|------|------|
+| WRITABLE → UNRELIABLE | >=5 个连续 ping 超时 **且** 最早未回复等了 5s | `CONNECTION_WRITE_CONNECT_FAILS=5`, `CONNECTION_WRITE_CONNECT_TIMEOUT=5000` |
+| UNRELIABLE/INIT → TIMEOUT | 最早未回复等了 15s | `CONNECTION_WRITE_TIMEOUT=15000` |
+
+双条件设计："5 个连续超时"防止偶发丢包误判，"等 5s"防止大 RTT 时快速误判。RTT 容忍窗口 = `2 * _rtt`，钳位在 `[100ms, 60000ms]`。
+
+*Receiving —— "对端→我们"方向*（`update_receiving()`，`ice_connection.cpp:414-430`）：
+
+| 路径 | 条件 | 含义 |
+|------|------|------|
+| 1 | `_last_ping_sent < _last_ping_response_received` | 我发了 ping 之后收到了 response——对端在听 |
+| 2 | `last_received() > 0 && now < last_received() + 2500ms` | 最近 2.5s 收到过任何数据 |
+
+`last_received()` = max(最后一次收 ping, 最后一次收 ping response, 最后一次收数据)，三个时间戳按需更新。**writable 和 receiving 独立判断**——UDP 链路可以单向通。
+
+*RTT 指数平滑 + 稳定判断*：
+
+```cpp
+// 首次: rtt = 测量值 (不参与平滑, 避免混入默认值3000)
+// 后续: rtt = old*0.75 + new*0.25
+```
+
+`stable() = _rtt_samples > 4 && !_miss_response(now)`。至少 5 个样本 + 无等待超过 `2*rtt` 的 ping。
+
+*weak() 的定义*：
+
+```cpp
+bool weak() { return !(writable() && receiving()); }
+```
+
+双向都通才叫 strong。这个定义直接影响 Controller 的 ping 频率选择。
+
+**第二层：IceTransportChannel —— 聚合所有连接**
+
+*writable = selected one*：
+
+```cpp
+bool writable = _selected_connection && _selected_connection->writable();
+```
+
+只看 selected connection。没有 selected → writable = false。
+
+*receiving = any one*：
+
+```cpp
+bool receiving = false;
+for (auto conn : connections()) {
+    if (conn->receiving()) { receiving = true; break; }
+}
+```
+
+与 writable 不对称——一个要求"选中的能发"，一个要求"任意一个在收"。
+
+*两个单调标记*：
+
+| 标记 | 置 true 时机 | 含义 |
+|------|------------|------|
+| `_had_connection` | `_add_connection()` 调用时 | 曾经创建过连接 |
+| `_has_been_connection` | `_set_writable(true)` 调用时 | 曾经 writable 过 |
+
+**永不回退**。用于区分不同失败类型。
+
+*七个状态的优先级计算*（`_compute_ice_transport_state()`，`ice_transport_channel.cpp:324-350`）：
+
+```
+① _had_connection && !has_connection  → k_failed         "曾有连接, 全死"
+② _has_been_connection && !writable  → k_disconnected    "曾经通, 现在断"
+③ !_had_connection && !has_connection → k_new             "从未有连接"
+④ has_connection && !writable        → k_checking        "有候选对, 在 ping"
+⑤ 以上都不是                          → k_connected       "一切正常"
+```
+
+`k_failed` vs `k_disconnected` 的区别：
+
+```
+k_failed:       所有连接 TIMEOUT → 候选对全死 → 不可恢复
+k_disconnected: selected 不通, 但候选对还在 → 可能切备用恢复
+```
+
+`k_failed` 最终触发 RtcStreamManager 销毁流（`rtc_stream_manager.cpp:181-191`）。销毁链路见 §12。
+
+**第三层：IceAgent —— 聚合多个 Channel**
+
+BUNDLE 下通常只有一个 Channel。多个 Channel 时逐状态计数，按优先级聚合（`ice_agent.cpp:76-118`）：
+
+```
+规则: failed > disconnected > new > checking > completed > connected
+```
+
+特殊处理：`k_checking → k_completed` 转换时人为注入 `k_connected` 信号，确保上层不跳过 `k_connected`（否则 30s 超时定时器不会被删除）。
+
+**第四层：TransportController —— ICE + DTLS 聚合为 PC 状态**
+
+`TransportController::_update_state()` 同时取 `DtlsTransport::dtls_state()` 和 `IceTransportChannel::state()`，每个 transport 算 dtls + ice 两份（`transport_controller.cpp:128-171`）：
+
+```
+规则: any failed → k_failed
+      any ice_disconnected → k_disconnected
+      all new+closed → k_new
+      any checking/connecting → k_connecting
+      all connected/completed/closed → k_connected
+```
+
+**注意**：DTLS 侧的 `dtls_state()` 是否变化会影响 PC 状态——DTLS 握手失败同样可以触发 `k_failed`。DTLS 状态机待后续深挖。
+
+**状态变化传播链**：
+
+```
+每个定时器周期 _on_check_and_ping():
+  → _update_connection_states() → conn->update_state()
+    → write_state 退化 → signal_state_change
+      → _sort_connections_and_update_state()
+        → _update_state()
+          → _set_writable → _has_been_connection = true → signal_writable_state_change
+          → _set_receiving → signal_receiving_state_change
+          → _compute_ice_transport_state → signal_ice_state_change
+            → IceAgent._update_state → signal_ice_state
+              → TransportController._update_state → signal_connection_state
+                → RtcStream._on_connection_state
+                  → k_connected: 删除 30s 超时定时器
+                  → k_failed: _listener->on_connection_state → delete stream
+```
+
+这就是为什么 `PeerConnection::destroy()` 需要 10ms 延迟析构——整条信号链的起点在 `_on_check_and_ping()` 的调用栈内。若同步 `delete pc`，`_ice_controller` 被析构后调用方还要访问它 → coredump。
+
 ---
 
 ## 2. 同一个 UDP socket 如何服务三层协议
