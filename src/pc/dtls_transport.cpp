@@ -261,13 +261,17 @@ bool DtlsTransport::_setup_dtls() {
     _dtls->SignalSSLHandshakeError.connect(this,
             &DtlsTransport::_on_dtls_handshake_error);
 
-    if (_remote_fingerprint_value.size() && !_dtls->SetPeerCertificateDigest(
-                _remote_fingerprint_alg,
+    if (_remote_fingerprint_value.size()) {
+        if (!_dtls->SetPeerCertificateDigest(_remote_fingerprint_alg,
                 _remote_fingerprint_value.data(),
                 _remote_fingerprint_value.size()))
-    {
-        RTC_LOG(LS_WARNING) << to_string() << ": Failed to set remote fingerprint";
-        return false;
+        {
+            RTC_LOG(LS_WARNING) << to_string() << ": Failed to set remote fingerprint";
+            return false;
+        }
+    } else {
+        RTC_LOG(LS_INFO) << to_string() << ": Remote fingerprint not yet available, "
+            << "will set later via set_remote_fingerprint";
     }
 
     if (!_srtp_ciphers.empty()) {
