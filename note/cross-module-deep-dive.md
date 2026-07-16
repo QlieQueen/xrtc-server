@@ -607,6 +607,17 @@ BUNDLE 下通常只有一个 Channel。多个 Channel 时逐状态计数，按�
 
 这就是为什么 `PeerConnection::destroy()` 需要 10ms 延迟析构——整条信号链的起点在 `_on_check_and_ping()` 的调用栈内。若同步 `delete pc`，`_ice_controller` 被析构后调用方还要访问它 → coredump。
 
+**已知问题**：receiving 信号链完整但上层未使用。
+
+```
+IceConnection::_receiving ← 唯一被实际使用的层 (Controller._weak())
+  → IceTransportChannel::_set_receiving()  ← 存储, 无人查询
+    → DtlsTransport::_set_receiving()      ← 存储, 无人查询
+      → TransportController::_on_dtls_receiving_state → _update_state() ← 不看值
+```
+
+四层中只有 `IceController::_weak()` 直接读 `IceConnection::receiving()`。上层三层的 receiving 存储和信号转发**仅作为 `_update_state()` 的触发源**，但 `_update_state()` 内部不看 receiving bool，只看 `IceTransportState` / `DtlsTransportState` 枚举值。如果将来需要在 PC 状态判断中考虑 receiving（比如 receiving=false 时即使 writable 也降级为 k_disconnected），骨架已就位。
+
 ---
 
 ## 2. 同一个 UDP socket 如何服务三层协议
