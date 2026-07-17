@@ -327,8 +327,8 @@ bool IceController::_is_connection_past_ping_interval(const IceConnection* conn,
 // IceController::_get_connection_ping_interval — 单连接的 ping 间隔 (三级)
 //
 //   1. 未满 3 次 ping              → WEAK_PING_INTERVAL (48ms)  快速初探
-//   2. channel weak 或连接不稳定   → STABLING_CONNECTION_PING_INTERVAL (900ms)
-//   3. channel strong 且连接稳定   → STABLE_CONNECTION_PING_INTERVAL (2500ms)
+//   2. 连接不稳定       → STABLING_CONNECTION_PING_INTERVAL (900ms)
+//   3. 连接稳定         → STABLE_CONNECTION_PING_INTERVAL (2500ms)
 //
 // 注意: 这只是允许 ping 的最小间隔，调度权在 channel 级速率门。
 // ============================================================================
@@ -339,7 +339,14 @@ int IceController::_get_connection_ping_interval(const IceConnection* conn,
         return WEAK_PING_INTERVAL;  // 48ms
     }
 
-    if (_weak() || !conn->stable(now)) {
+    // _weak() 不需要在此判断: 两条到达路径 (round-robin 走 _is_pingable,
+    // selected_connection 走 _find_next_pingable_connection) 都在上游被 writable
+    // 或 _is_pingable 短路, _weak()=true 时根本到不了这里
+    // if (_weak() || !conn->stable(now)) {
+    //     return STABLING_CONNECTION_PING_INTERVAL;  // 900ms
+    // }
+
+    if (!conn->stable(now)) {
         return STABLING_CONNECTION_PING_INTERVAL;  // 900ms
     }
 

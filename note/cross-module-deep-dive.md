@@ -714,8 +714,8 @@ int ping_interval = (_weak() || need_ping_more_at_weak)
 | 条件 | 间隔 | 含义 |
 |------|------|------|
 | `< 3 次 ping` | 48ms | 新连接，快速摸清质量 |
-| channel weak 或连接不稳定 | 900ms | 中等频率 |
-| channel strong 且连接稳定 | 2500ms | 低频保活 |
+| 连接不稳定 | 900ms | 中等频率 |
+| 连接稳定 | 2500ms | 低频保活 |
 
 **两层同时满足才真发包**：
 
@@ -744,7 +744,7 @@ Connection 级在此基础上进一步限速:
 
 **关键：weak 时 Connection 级间隔被跳过**。
 
-`_is_pingable()` 中 `_weak()` 为 true 时直接 `return true`，根本不走到 `_is_connection_past_ping_interval`。所以 `_get_connection_ping_interval` 里的 900ms / 2500ms **在 weak 状态下完全不会被调用**：
+`_is_pingable()` 中 `_weak()` 为 true 时直接 `return true`，根本不走到 `_is_connection_past_ping_interval`。因此 `_get_connection_ping_interval` 里的 `_weak()` 检查是死代码，已移除——该函数只区分稳定/不稳定两个级别：
 
 ```cpp
 bool _is_pingable(IceConnection* conn, int64_t now) {
@@ -1072,7 +1072,7 @@ bool IceController::_is_pingable(IceConnection* conn, int64_t now) {
 | 条件 | 间隔 | 语义 |
 |------|------|------|
 | `num_pings_sent < 3` | **48ms** | 新连接快速初探 |
-| `_weak()` 或 `!conn->stable(now)` | **900ms** | 连接不稳定，中频探测 |
+| `!conn->stable(now)` | **900ms** | 连接不稳定，中频探测 |
 | 以上都不满足 | **2500ms** | 连接稳定，低频保活 |
 
 `conn->stable()` 的定义（`ice_connection.cpp:324`）：
@@ -1204,19 +1204,13 @@ IceConnection* IceController::sort_and_switch_connection() {
 | 级别 | 比较项 | 规则 | 为什么这一级不可或缺 |
 |------|--------|------|-------------------|
 | 1 | `writable()` | true > false | 能发数据是首要条件。writable=false 直接淘汰 |
-| 2 | `write_state()` | 值小的 > 值大的 | writable 是二值，两个 writable=true 的连接可能一个 WRITABLE(0)、一个 UNRELIABLE(1)——需要更细粒度区分 |
+| 2 | `write_state()` | 值小的 > 值大的 | writable 是二值, 两个 non-writable 连接需进一步区分: UNRELIABLE(1) 刚失联 > INIT(2) 未测试 > TIMEOUT(3) 已死 |
 | 3 | `receiving()` | true > false | 对端→我方向还活着。两个都 writable 但一个对端已失活的数据通道不可靠 |
 | 4 | `priority()` | 值大的 > 值小的 | RFC 5245 公式：`2^32*min(G,D) + 2*max(G,D) + (G>D?1:0)`，编码了 candidate 类型偏好 |
 | 5 | `rtt()` | 值小的 > 值大的 | `stable_sort` lambda 中 fallback。前 4 级全相等时，RTT 最小的最优先 |
 
-**为什么 write_state 单独一级而不是只看 writable？** 假设两个连接：
+**为什么 write_state 单独一级？** `writable()` 是二值: true = STATE_WRITABLE(0), false = 其余三个状态。两个都 non-writable 时 `writable()` 打平, 但 UNRELIABLE(1)（刚失联，恢复概率高）比 TIMEOUT(3)（已死）更好——write_state 值越小越"接近"可用。
 
-```
-Conn A: writable=true, write_state=STATE_WRITE_UNRELIABLE (1)  ← 不稳定但还能用
-Conn B: writable=true, write_state=STATE_WRITABLE (0)          ← 健康
-```
-
-如果只看 writable，两者打平，得靠后面的优先级和 RTT 决定——可能不稳定连接反而胜出。有了 write_state 这一级，Conn B 直接胜出，不必走到后面的比较。
 
 **`ready_to_send`**（`ice_controller.cpp:64`）：
 
