@@ -1237,7 +1237,7 @@ void IceConnection::received_ping_response(int rtt) {
         _rtt = rtc::GetNextMovingAverage(_rtt, rtt, RTT_RATIO);
         // 等价于: _rtt = (_rtt * 3 + rtt) / 4  →  旧值 75% + 新值 25%
     } else {
-        _rtt = rtt;  // 首次测量直接赋值，不参与平滑（避免初始 outlier 锚定）
+        _rtt = rtt;  // 首次测量直接赋值——平滑公式需要旧 _rtt，首次没有旧值可平滑
     }
     ++_rtt_samples;
     _last_ping_response_received = rtc::TimeMillis();
@@ -1250,7 +1250,7 @@ void IceConnection::received_ping_response(int rtt) {
 
 **权重 3:1 的含义**：RTT 对单次网络抖动敏感，但平滑后不能太迟钝。3:1 是 RFC 6298 TCP RTO 的经典权重——足够平滑以过滤噪声，又足够灵敏以反映趋势变化。
 
-**首次测量直接赋值**：如果第一次 RTT 测量值是异常的 500ms（偶然丢包重传），用平滑公式的话初始 `_rtt` 被锚定在 500ms，后续测量 10ms 也只能缓慢下拉。直接赋值让初始值无偏，随后平滑自然收敛到真实值。
+**首次测量直接赋值**：指数平滑是递推公式 `_rtt = _rtt * 0.75 + rtt * 0.25`，需要旧 `_rtt` 参与计算。首次测量时没有旧值（构造函数初始值 3000 是任意的，不是真实测量），只能直接赋值建立基线。
 
 ---
 
@@ -1275,32 +1275,18 @@ IceTransportState IceTransportChannel::_compute_ice_transport_state() {
 
 ---
 
-### 5.11 状态变化驱动的重排序路径
+### 5.11 `_sort_connections_and_update_state` 触发点
 
-非定时器驱动的重排序由两条路径触发：
+`_sort_connections_and_update_state` 有四个触发点，全部是事件驱动（非定时器直接调用——定时器 `_on_check_and_ping` 通过 ping response → `set_write_state` → signal → 走触发点 3 间接触发）：
 
-**路径 A — `_on_connection_state_change`**：
+| # | 触发点 | 代码位置 | 场景 |
+|---|--------|---------|------|
+| 1 | `set_remote_ice_params` | L82 | ANSWER 到达，为已有连接补填对端密码后重新排序 |
+| 2 | `_on_unknown_address` | L184 | 收到来自未知地址的 STUN binding request，创建新 prflx connection 后 |
+| 3 | `_on_connection_state_change` | L227 | 任何连接的 write_state 或 receiving 变化 |
+| 4 | `_on_connection_destroyed` | L245 | 销毁的是 selected connection 时（销毁非 selected 只走 `_update_state` 不重排序） |
 
-```
-set_write_state / update_receiving → signal_state_change
-  → _on_connection_state_change
-    → _sort_connections_and_update_state
-      → sort_and_switch_connection (RTT 防抖切换)
-      → _update_state
-      → _maybe_start_pinging (已启动 → 跳过)
-```
-
-**路径 B — `_on_connection_destroyed`**：
-
-```
-IceConnection::destroy() → signal_connection_destroy
-  → _on_connection_destroyed
-    → 从 controller 清理 (connections + pinged + unpinged)
-    → 如果销毁的是 selected → _switch_selected_connection(nullptr) + 重排序
-    → _update_state (receiving 可能重算——销毁非 selected 连接后仍需重新判断)
-```
-
-路径 B 的 `_update_state` 很重要：`receiving` 看任意连接，销毁一个连接后可能从 `receiving=true` 变为 `false`，必须重新计算。
+**触发点 4 的细节**：`_on_connection_destroyed` 中只有销毁 selected 时才调 `_sort_connections_and_update_state`（先 `_switch_selected_connection(nullptr)` 清空再重选）。销毁非 selected 只调 `_update_state`——`receiving` 看任意连接，销毁一个后可能从 `receiving=true` 变 `false`，必须重算。
 
 ---
 
