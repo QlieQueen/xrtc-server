@@ -42,6 +42,16 @@ Rules:
 
 These are agreed-upon rules for maximizing learning efficiency and code quality during commit-by-commit implementation.
 
+### For Claude — Answer Protocol (CRITICAL, applies to ALL responses)
+
+Before answering any question about code logic, correctness, or behavior:
+
+1. **Restate** your understanding of the current project structure, the goal of the relevant module, and the code hierarchy involved
+2. **Confirm** your understanding is correct, then give the answer
+3. **If unsure** about any part, ask first — do not guess
+
+This means: read the actual source code implementations first (not just call sites, not just docs), trace invariants end-to-end, then answer. Searching and finding a data point is not enough.
+
 ### For Claude — 5-Rule Teaching Protocol (Phase 10+)
 
 **Rule 1: Phase 启动 → 先给路标**
