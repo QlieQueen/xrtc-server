@@ -520,13 +520,13 @@ set_local_description()
 
 ```
 客户端 WiFi:    192.168.1.100:50001  ──┐
-                                        ├──→ SFU UDPPort 120.76.197.143:10028
-客户端 以太网:  10.0.0.50:50002     ──┘
+                                      ├──→ SFU UDPPort 120.76.197.143:10028
+客户端 以太网:  10.0.0.50:50002       ──┘
 
-                                    同一个 UDPPort
+                                   同一个 UDPPort
                                    _connections map:
-                                     key "192.168.1.100:50001" → IceConnection #1
-                                     key "10.0.0.50:50002"     → IceConnection #2
+                                    key "192.168.1.100:50001" → IceConnection #1
+                                    key "10.0.0.50:50002"     → IceConnection #2
 ```
 
 `UDPPort` 内部用 `std::map<SocketAddress, IceConnection*> _connections` 按客户端地址索引（`src/ice/udp_port.cpp:107-110`）：
@@ -738,9 +738,38 @@ int ping_interval = (_weak() || need_ping_more_at_weak)
   └─ strong 时 480ms: 低频, 已经选出来了, 不需要频繁换
 
 Connection 级在此基础上进一步限速:
-  weak 时: timer=48ms, 新连接 conn_interval=48ms → 每 48ms 一个
+  weak 时: timer=48ms, _is_pingable 中 _weak() 直接返回 true, 不查 Connection 级间隔
   strong 时: timer=480ms, 稳定连接 conn_interval=2500ms → 实际每 2500ms 才 ping 一次
 ```
+
+**关键：weak 时 Connection 级间隔被跳过**。
+
+`_is_pingable()` 中 `_weak()` 为 true 时直接 `return true`，根本不走到 `_is_connection_past_ping_interval`。所以 `_get_connection_ping_interval` 里的 900ms / 2500ms **在 weak 状态下完全不会被调用**：
+
+```cpp
+bool _is_pingable(IceConnection* conn, int64_t now) {
+    if (remote.username.empty() || remote.password.empty()) return false;
+    if (_weak()) return true;   // ← 直接放行，跳过 Connection 级限速
+    return _is_connection_past_ping_interval(conn, now);  // strong 时才进入
+}
+```
+
+因此 48ms 和 900ms 从来不共存——它们在不同模式下各管各的：
+
+```
+weak 模式:
+  timer = 48ms
+  → round-robin 公平轮转，每 48ms 任一凭据齐全的连接都可能被选中 ping
+  → 某个连接收到 response → writable → sort_and_switch → 成为 selected
+  → selected 稳定 → _weak() 变 false → 切换 strong 模式
+
+strong 模式:
+  timer = 480ms
+  → selected 优先被 ping (2500ms 间隔)
+  → 其他连接按各自间隔: 不稳定 900ms, 稳定 2500ms
+```
+
+这就是"快速收敛"的本质——48ms 高速轮询所有候选对，直到有一个胜出，此后降频省带宽。
 
 **已知问题**：当前采用 Aggressive Nomination——每包 ping 都带 USE-CANDIDATE（`stun_request.cpp:120`），包括轮询探活其他 pair 的 ping。这会导致客户端被探活 ping "误导"切到非 selected 的 pair。正确做法是 Regular Nomination：只有 selected connection 的 ping 才带 USE-CANDIDATE。单网口场景下无实际影响（仅 1 个 IceConnection），多网卡时需修复。代码已标记 TODO。
 
@@ -2449,4 +2478,143 @@ class StreamInterfaceChannel {
 两个方向的 `SignalEvent` 含义不同：我们发 `SE_READ` 是"叫 OpenSSL 来读 BufferQueue"，OpenSSL 发 `SE_OPEN` 是"握手完成"、发 `SE_READ` 是"解密数据就绪"。谁点火、谁接收是关键区分。
 
 ---
+
+## 16. DTLS Transport 深挖
+
+### 16.1 定位：被动的中间层
+
+`DtlsTransport` 自己不主动做任何事。它坐在 ICE channel 旁边，靠三个信号驱动：
+
+```cpp
+// dtls_transport.cpp:131-138
+DtlsTransport::DtlsTransport(IceTransportChannel* channel) : _channel(channel) {
+    _channel->signal_read_packet.connect(this, &DtlsTransport::_on_read_packet);
+    _channel->signal_writable_state_change.connect(this, &DtlsTransport::_on_writable_state);
+    _channel->signal_receiving_state_change.connect(this, &DtlsTransport::_on_receiving_state);
+}
+```
+
+构造函数不创建 OpenSSL 上下文，不启动握手。只保存指针 + 订阅信号。
+
+### 16.2 三个开工条件——谁最后到谁触发
+
+DtlsTransport 正式启动 DTLS 握手需要三个条件同时满足：
+
+| 条件 | 含义 | 何时就绪 |
+|------|------|---------|
+| `_dtls` 已创建 | OpenSSL DTLS 上下文存在 | `_setup_dtls()` 被调用后 |
+| `_remote_fingerprint_value` 非空 | 客户端 DTLS 证书指纹已知 | ANSWER SDP 到达后 |
+| `_channel->writable()` 为 true | ICE 通道可发送数据 | STUN ping/pong 成功后 |
+
+三个条件由**三个独立事件**交付，以任意顺序到达：
+
+```
+事件 A：收到 DTLS ClientHello (UDP)
+  → _on_read_packet(k_new)
+    → _catched_client_hello 缓存
+    → _setup_dtls()                       ← 条件: _local_certificate 已设置
+        OpenSSL 上下文创建 (_dtls 就绪 ✓)
+        fingerprint 空的 → SetPeerCertificateDigest 跳过
+    → _maybe_start_dtls()
+      → _dtls ✓, fingerprint ✗, writable ✗ → 不启动
+
+事件 B：ANSWER 到达 (TCP)
+  → set_remote_fingerprint()
+    → 存 _remote_fingerprint_alg/value (fingerprint 就绪 ✓)
+    → 如果 _dtls 还没创建 → _setup_dtls()
+    → 如果 _dtls 已存在 (事件A先到) → 补调 SetPeerCertificateDigest()
+    → _maybe_start_dtls()
+      → _dtls ✓, fingerprint ✓, writable ✗ → 不启动
+
+事件 C：ICE writable
+  → _on_writable_state(k_new)
+    → _maybe_start_dtls()
+      → _dtls ✓, fingerprint ✓, writable ✓ → StartSSL! ★
+```
+
+**最后一个到达的事件触发 StartSSL**。这种设计是 DTLS 层与 ICE 层异步解耦的核心——DTLS 不关心 ICE 何时通、SDP 何时到，它只等三者齐全。
+
+### 16.3 `_setup_dtls`：OpenSSL 上下文的创建
+
+`_setup_dtls()`（`dtls_transport.cpp:243-287`）创建完整的 OpenSSL DTLS 服务端上下文，可被多次调用（`_dtls` 不存在时才创建新的）：
+
+```cpp
+bool DtlsTransport::_setup_dtls() {
+    // ① 创建 BIO 适配器: ICE ↔ OpenSSL
+    auto downward = std::make_unique<StreamInterfaceChannel>(_channel);
+    _downward = downward.get();
+
+    // ② 创建 SSLStreamAdapter, 移入 downward (BIO 层)
+    _dtls = SSLStreamAdapter::Create(std::move(downward));
+    _dtls->SetIdentity(_local_certificate->identity()->Clone());
+    _dtls->SetMode(SSL_MODE_DTLS);
+    _dtls->SetMaxProtocolVersion(SSL_PROTOCOL_DTLS_12);
+    _dtls->SetServerRole(SSL_SERVER);       // ★ SFU 是 DTLS 服务端
+
+    // ③ 订阅 OpenSSL 回调
+    _dtls->SignalEvent.connect(this, &_on_dtls_event);             // SE_OPEN/SE_READ/SE_CLOSE
+    _dtls->SignalSSLHandshakeError.connect(this, &_on_dtls_handshake_error);
+
+    // ④ 设置对端指纹 (如果已从 ANSWER 中获得)
+    if (_remote_fingerprint_value.size()) {
+        _dtls->SetPeerCertificateDigest(alg, data, size);
+    }  // 否则留空, 等 set_remote_fingerprint() 补调
+
+    // ⑤ 设置 SRTP 密码套件 (DTLS-SRTP 扩展)
+    _dtls->SetDtlsSrtpCryptoSuites(_srtp_ciphers);
+
+    // ⑥ 尝试启动
+    _maybe_start_dtls();
+    return true;
+}
+```
+
+关键：SFU 作为 `SSL_SERVER`（DTLS 服务端），客户端是 DTLS 客户端（发起 ClientHello）。
+
+### 16.4 `_maybe_start_dtls`：条件启动
+
+```cpp
+void DtlsTransport::_maybe_start_dtls() {
+    if (_dtls && _channel->writable()) {        // 两个硬条件
+        if (_dtls->StartSSL()) {                 // OpenSSL 启动握手
+            _set_dtls_state(k_failed);
+            return;
+        }
+        _set_dtls_state(k_connecting);
+        if (_catched_client_hello.size()) {
+            _handle_dtls_packet(_catched_client_hello);   // 重放缓存的 ClientHello
+            _catched_client_hello.Clear();
+        }
+    }
+}
+```
+
+不一定每次都成功——如果 ICE 没 writable 或 `_dtls` 还没创建，静默返回。设计上允许被多次调用，谁最后一个拿到条件的谁触发。
+
+### 16.5 状态机
+
+```
+k_new ──_maybe_start_dtls(), StartSSL──→ k_connecting
+k_connecting ──_on_dtls_event(SE_OPEN)───→ k_connected
+k_connecting ──_on_dtls_handshake_error──→ k_failed
+k_connected ──_on_dtls_event(SE_CLOSE)───→ k_closed (正常关闭)
+k_connected ──_on_dtls_event(SE_CLOSE + error)──→ k_failed (异常关闭)
+```
+
+终态（`k_failed` / `k_closed`）无恢复机制——进入后只能等上层 STOP 或 k_failed 销毁。
+
+**writable 的生命周期**：k_new 时 mirror ICE writable，k_connected 后由 DTLS 自己管理：
+
+```cpp
+// _on_writable_state(k_new)
+→ _set_writable_state(channel->writable())  // 透传 ICE 状态
+
+// _on_dtls_event(SE_OPEN)
+→ _set_writable_state(true)                 // DTLS 接管
+
+// _on_dtls_event(SE_CLOSE)
+→ _set_writable_state(false)                // DTLS 断开
+```
+
+**后续待深挖**：StreamInterfaceChannel（OpenSSL↔ICE 的 BIO 桥接）、`_handle_dtls_packet`（DTLS Record 校验与注入）、`_on_dtls_event` SE_READ 的解密循环。
 
