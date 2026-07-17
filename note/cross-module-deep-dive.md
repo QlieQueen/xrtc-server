@@ -1277,16 +1277,19 @@ IceTransportState IceTransportChannel::_compute_ice_transport_state() {
 
 ### 5.11 `_sort_connections_and_update_state` 触发点
 
-`_sort_connections_and_update_state` 有四个触发点，全部是事件驱动（非定时器直接调用——定时器 `_on_check_and_ping` 通过 ping response → `set_write_state` → signal → 走触发点 3 间接触发）：
+`_sort_connections_and_update_state` 捆绑了三件事：sort+switch、`_update_state`、`_maybe_start_pinging`。
+四个触发点全部由事件驱动，但各自依赖的子步骤不同：
 
-| # | 触发点 | 代码位置 | 场景 |
-|---|--------|---------|------|
-| 1 | `set_remote_ice_params` | L82 | ANSWER 到达，为已有连接补填对端密码后重新排序 |
-| 2 | `_on_unknown_address` | L184 | 收到来自未知地址的 STUN binding request，创建新 prflx connection 后 |
-| 3 | `_on_connection_state_change` | L227 | 任何连接的 write_state 或 receiving 变化 |
-| 4 | `_on_connection_destroyed` | L245 | 销毁的是 selected connection 时（销毁非 selected 只走 `_update_state` 不重排序） |
+| # | 触发点 | 代码位置 | 场景 | 实际生效的子步骤 |
+|---|--------|---------|------|-----------------|
+| 1 | `set_remote_ice_params` | L82 | ANSWER 到达，补填对端密码 | `_maybe_start_pinging`（冷启动） |
+| 2 | `_on_unknown_address` | L184 | 收到 STUN binding request，创建新 prflx connection | `_maybe_start_pinging`（冷启动） |
+| 3 | `_on_connection_state_change` | L227 | 任何连接的 write_state 或 receiving 变化 | 三者全部生效 |
+| 4 | `_on_connection_destroyed` | L245 | 销毁的是 selected connection | sort+switch + `_update_state` |
 
-**触发点 4 的细节**：`_on_connection_destroyed` 中只有销毁 selected 时才调 `_sort_connections_and_update_state`（先 `_switch_selected_connection(nullptr)` 清空再重选）。销毁非 selected 只调 `_update_state`——`receiving` 看任意连接，销毁一个后可能从 `receiving=true` 变 `false`，必须重算。
+触发点 1、2 中 sort+switch 基本是空操作——连接刚创建或刚拿到凭据，`write_state` 还是 `STATE_WRITE_INIT`，`ready_to_send` 要求 `writable()`（即 `_write_state == STATE_WRITABLE`）或 `STATE_WRITE_UNRELIABLE`，新连接两者都不满足，`sort_and_switch_connection` 返回 nullptr。真正的目的是 `_maybe_start_pinging`：凭据到位 / 连接就绪后首次启动 ping 定时器。
+
+触发点 4 的细节：销毁非 selected 时不调此函数，只走 `_update_state`——`receiving` 看任意连接，销毁一个后可能从 `receiving=true` 变 `false`，必须重算。
 
 ---
 
