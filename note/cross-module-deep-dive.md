@@ -5,88 +5,24 @@
 > 配套：系统总览 [`README.md`](../README.md)、模块纵向深潜 [`DEEP-DIVE.md`](../DEEP-DIVE.md)。
 
 ## 目录
-1. [1. 证书体系：HTTPS + DTLS 双层认证](#1-1.-证书体系：HTTPS-+-DTLS-双层认证)
-    - 1.1 [全景](#1.1-全景)
-    - 1.2 [证书 ①：HTTPS 证书（Go 信令服务）](#1.2-证书 ①：HTTPS 证书（Go 信令服务）)
-    - 1.3 [证书 ②：DTLS 证书（xrtc-server SFU）](#1.3-证书 ②：DTLS 证书（xrtc-server SFU）)
-    - 1.4 [证书 ③：DTLS 证书（客户端）](#1.4-证书 ③：DTLS 证书（客户端）)
-    - 1.5 [DTLS 握手中的证书交换](#1.5-DTLS 握手中的证书交换)
-    - 1.6 [为什么不需要 CA？fingerprint 机制](#1.6-为什么不需要 CA？fingerprint 机制)
-    - 1.7 [总结](#1.7-总结)
-2. [2. TCP 信令 vs UDP 媒体：同一 libev LT 下的两种 I/O 哲学](#2-2.-TCP-信令-vs-UDP-媒体：同一-libev-LT-下的两种-I/O-哲学)
-    - 2.1 [读策略](#2.1-读策略)
-    - 2.2 [写策略](#2.2-写策略)
-    - 2.3 [汇总对比](#2.3-汇总对比)
-3. [3. set_local_description：整个媒体栈的"接生婆"](#3-3.-set_local_description：整个媒体栈的"接生婆")
-    - 3.1 [入口时间线](#3.1-入口时间线)
-    - 3.2 [`create_offer()` 的四个阶段](#3.2-`create_offer()` 的四个阶段)
-    - 3.3 [`TransportController::set_local_description()` 的 8 个副作用](#3.3-`TransportController::set_local_description()` 的 8 个副作用)
-    - 3.4 [`gathering_candidate()` → UDP socket 绑定](#3.4-`gathering_candidate()` → UDP socket 绑定)
-4. [4. Candidate Pair → IceConnection：从 UDP 四元组到逻辑通道](#4-4.-Candidate-Pair-→-IceConnection：从-UDP-四元组到逻辑通道)
-    - 4.5 [IceTransportChannel × Network → UDPPort 的数量关系](#4.5-IceTransportChannel × Network → UDPPort 的数量关系)
-    - 4.6 [Candidate Pair → IceConnection：从 UDP 四元组到逻辑通道](#4.6-Candidate Pair → IceConnection：从 UDP 四元组到逻辑通道)
-5. [5. ICE ping 定时器 + 两层限速 + 5 级排序](#5-5.-ICE-ping-定时器-+-两层限速-+-5-级排序)
-    - 5.7 [ICE ping 定时器的冷启动条件](#5.7-ICE ping 定时器的冷启动条件)
-    - 5.8 [定时器的三职责 + 两层限速](#5.8-定时器的三职责 + 两层限速)
-    - 5.1 [关键常量速查](#5.1-关键常量速查)
-    - 5.2 [冷启动：从第一个 UDP 包到定时器启动](#5.2-冷启动：从第一个 UDP 包到定时器启动)
-    - 5.3 [稳态：`_on_check_and_ping` 每周期循环](#5.3-稳态：`_on_check_and_ping` 每周期循环)
-    - 5.4 [第一层限速：Channel 级速率门](#5.4-第一层限速：Channel 级速率门)
-    - 5.5 [第二层限速：Connection 级间隔 + Round-Robin](#5.5-第二层限速：Connection 级间隔 + Round-Robin)
-    - 5.6 [两层限速完整矩阵](#5.6-两层限速完整矩阵)
-    - 5.7 [连接写状态降级：`update_state`](#5.7-连接写状态降级：`update_state`)
-    - 5.8 [5 级排序算法 + RTT 防抖](#5.8-5 级排序算法 + RTT 防抖)
-    - 5.9 [RTT 指数平滑](#5.9-RTT 指数平滑)
-    - 5.10 [write_state 超时 → k_failed → UAF 防护链](#5.10-write_state 超时 → k_failed → UAF 防护链)
-    - 5.11 [状态变化驱动的重排序路径](#5.11-状态变化驱动的重排序路径)
-    - 5.12 [完整调用链总览](#5.12-完整调用链总览)
-6. [6. ICE 四层状态机](#6-6.-ICE-四层状态机)
-    - 6.9 [ICE 状态机：从 IceConnection 到 IceTransportChannel 到 IceAgent](#6.9-ICE 状态机：从 IceConnection 到 IceTransportChannel 到 IceAgent)
-7. [7. SDP 字段 → ICE/DTLS 的"最后一公里"](#7-7.-SDP-字段-→-ICE/DTLS-的"最后一公里")
-    - 7.1 [字段提取](#7.1-字段提取)
-    - 7.2 [分发：同一个函数同时喂 ICE 和 DTLS](#7.2-分发：同一个函数同时喂 ICE 和 DTLS)
-    - 7.3 [ice-ufrag/pwd 的两把密码 + 各自消费点](#7.3-ice-ufrag/pwd 的两把密码 + 各自消费点)
-    - 7.4 [密码的"先有鸡还是先有蛋"问题](#7.4-密码的"先有鸡还是先有蛋"问题)
-    - 7.5 [fingerprint 的两个时序路径](#7.5-fingerprint 的两个时序路径)
-8. [8. 三包竞态：STUN / DTLS ClientHello / ANSWER 时序全集](#8-8.-三包竞态：STUN-/-DTLS-ClientHello-/-ANSWER-时序全集)
-    - 8.1 [六种时序](#8.1-六种时序)
-    - 8.2 [时序 4 详细走读（唯一有延迟损失的路径）](#8.2-时序 4 详细走读（唯一有延迟损失的路径）)
-    - 8.3 [`_catched_client_hello` 的真实作用范围](#8.3-`_catched_client_hello` 的真实作用范围)
-9. [9. 同一个 UDP socket 如何服务三层协议](#9-9.-同一个-UDP-socket-如何服务三层协议)
-    - 9.1 [收包分拣链（完整）](#9.1-收包分拣链（完整）)
-    - 9.2 [四个分拣层](#9.2-四个分拣层)
-    - 9.3 [发包容积链（完整）](#9.3-发包容积链（完整）)
-10. [10. 信号链：ICE writable → DTLS → SRTP → RTP 就绪](#10-10.-信号链：ICE-writable-→-DTLS-→-SRTP-→-RTP-就绪)
-    - 10.1 [信号订阅全景](#10.1-信号订阅全景)
-    - 10.2 [多米诺骨牌](#10.2-多米诺骨牌)
-    - 10.3 [PC 状态聚合](#10.3-PC 状态聚合)
-11. [11. RTP/RTCP 数据包处理](#11-11.-RTP/RTCP-数据包处理)
-    - 11.1 [两级解复用](#11.1-两级解复用)
-    - 11.2 [解密与转发链](#11.2-解密与转发链)
-    - 11.3 [RtcStreamManager 转发逻辑](#11.3-RtcStreamManager 转发逻辑)
-    - 11.4 [发包路径](#11.4-发包路径)
-12. [12. PULL 流 + SSRC 透传](#12-12.-PULL-流-+-SSRC-透传)
-    - 12.1 [创建流程](#12.1-创建流程)
-    - 12.2 [PushStream 如何提取 SSRC](#12.2-PushStream 如何提取 SSRC)
-    - 12.3 [PullStream 的 offer 怎么用这些 SSRC](#12.3-PullStream 的 offer 怎么用这些 SSRC)
-    - 12.4 [PushStream vs PullStream 对比](#12.4-PushStream vs PullStream 对比)
-13. [13. STOP 与资源清理链](#13-13.-STOP-与资源清理链)
-    - 13.1 [两个清理入口](#13.1-两个清理入口)
-    - 13.2 [UID 校验 + delete](#13.2-UID 校验 + delete)
-    - 13.3 [析构瀑布](#13.3-析构瀑布)
-    - 13.4 [为什么需要 10ms 延迟析构](#13.4-为什么需要 10ms 延迟析构)
-    - 13.5 [STOP 命令 vs 异常清理对比](#13.5-STOP 命令 vs 异常清理对比)
-14. [14. 完整生命周期时间线](#14-14.-完整生命周期时间线)
-15. [15. FAQ：你应该知道但可能没问的问题](#15-15.-FAQ：你应该知道但可能没问的问题)
-    - 15.1 [STUN MESSAGE-INTEGRITY 的密码使用规则："发给谁，就用谁的密码"](#15.1-STUN MESSAGE-INTEGRITY 的密码使用规则："发给谁，就用谁的密码")
-    - 15.2 [`DtlsTransport::send_packet()` 为什么绕过 DTLS 加密？](#15.2-`DtlsTransport::send_packet()` 为什么绕过 DTLS 加密？)
-    - 15.3 [30s ICE 超时和 PC 状态 `k_connected` 的关系](#15.3-30s ICE 超时和 PC 状态 `k_connected` 的关系)
-    - 15.4 [PushStream 和 PullStream 的 `create_offer()` 本质区别](#15.4-PushStream 和 PullStream 的 `create_offer()` 本质区别)
-    - 15.5 [`DtlsTransport` 和 `DtlsSrtpTransport` 的"组合优于继承"关系](#15.5-`DtlsTransport` 和 `DtlsSrtpTransport` 的"组合优于继承"关系)
-    - 15.6 [`PeerConnection::destroy()` 延迟析构](#15.6-`PeerConnection::destroy()` 延迟析构)
-    - 15.7 [`StreamInterfaceChannel` 的 BIO 桥接](#15.7-`StreamInterfaceChannel` 的 BIO 桥接)
 
----
+1. [证书体系：HTTPS + DTLS 双层认证](#1-证书体系HTTPS-+-DTLS-双层认证)
+2. [TCP 信令 vs UDP 媒体：同一 libev LT 下的两种 I/O 哲学](#2-TCP-信令-vs-UDP-媒体同一-libev-LT-下的两种-I-O-哲学)
+3. [set_local_description：整个媒体栈的"接生婆"](#3-set_local_description整个媒体栈的"接生婆")
+4. [Candidate Pair → IceConnection：从 UDP 四元组到逻辑通道](#4-Candidate-Pair---IceConnection从-UDP-四元组到逻辑通道)
+5. [ICE ping 定时器 + 两层限速 + 5 级排序](#5-ICE-ping-定时器-+-两层限速-+-5-级排序)
+6. [ICE 四层状态机](#6-ICE-四层状态机)
+7. [DTLS Transport 深挖](#7-DTLS-Transport-深挖)
+8. [SDP 字段 → ICE/DTLS 的"最后一公里"](#8-SDP-字段---ICE-DTLS-的"最后一公里")
+9. [三包竞态：STUN / DTLS ClientHello / ANSWER 时序全集](#9-三包竞态STUN---DTLS-ClientHello---ANSWER-时序全集)
+10. [同一个 UDP socket 如何服务三层协议](#10-同一个-UDP-socket-如何服务三层协议)
+11. [信号链：ICE writable → DTLS → SRTP → RTP 就绪](#11-信号链ICE-writable---DTLS---SRTP---RTP-就绪)
+12. [RTP/RTCP 数据包处理](#12-RTP-RTCP-数据包处理)
+13. [PULL 流 + SSRC 透传](#13-PULL-流-+-SSRC-透传)
+14. [STOP 与资源清理链](#14-STOP-与资源清理链)
+15. [完整生命周期时间线](#15-完整生命周期时间线)
+16. [FAQ：你应该知道但可能没问的问题](#16-FAQ你应该知道但可能没问的问题)
+16. [DTLS Transport 深挖](#16-DTLS-Transport-深挖)
 
 ## 1. 证书体系：HTTPS + DTLS 双层认证
 
@@ -242,7 +178,6 @@ RFC 8122 将这种模式称为 "Certificate Fingerprint"——SDP 中携带的 f
 
 ---
 
-
 ## 2. TCP 信令 vs UDP 媒体：同一 libev LT 下的两种 I/O 哲学
 
 libev 只有 LT（水平触发）模式，但 TCP 和 UDP 在 LT 下的读写策略截然不同。核心原因是**字节流 vs 数据报**的本质差异。
@@ -304,7 +239,6 @@ void AsyncUdpSocket::recv_data() {
 | **反压** | TCP 流控 + `reply_list` | `_udp_packet_list` |
 
 ---
-
 
 ## 3. set_local_description：整个媒体栈的"接生婆"
 
@@ -446,7 +380,6 @@ int UDPPort::create_ice_candidate(Network* network, int min_port, int max_port, 
 ```
 
 **总结**：`set_local_description` 不仅把 candidate 填入 SDP，更创建了绑定在本地网卡上的 UDP socket，并通过 `signal_read_packet` 连接把它变成了后续所有 ICE/DTLS/SRTP 数据的入口。
-
 
 ## 4. Candidate Pair → IceConnection：从 UDP 四元组到逻辑通道
 
@@ -610,7 +543,6 @@ int IceTransportChannel::send_packet(const char* data, size_t len) {
 | 聚合层 | IceTransportChannel | 管理 UDPPort + IceController，向外暴露 writable/receiving 信号 |
 
 所有 IceConnection 共享同一个物理 socket，但独立的状态决定了：哪个连接被选中发数据、哪个连接已失效需要淘汰。DTLS 握手、SRTP 加解密、RTP 转发最终都通过**那一个** `_selected_connection` 的 `send_packet()` 发出，通过 `on_read_packet()` → `signal_read_packet` 收进来。
-
 
 ## 5. ICE ping 定时器 + 两层限速 + 5 级排序
 
@@ -1093,7 +1025,7 @@ bool IceConnection::stable(int64_t now) const {
                     ────────────                          ─────────────────
                     控制整体发包节奏                       保护单连接不被过度 ping
 
-WEAK (48ms):       每 48ms 最多 1 个 ping                 跳过（_weak() 直接返回 true）
+WEAK (48ms):       每 48ms 最多 1 个 ping                 _is_pingable 不检查间隔，round-robin 选一个直接 ping
 STRONG (480ms):    每 480ms 最多 1 个 ping                新连接 48ms / 不稳定 900ms / 稳定 2500ms
 ```
 
@@ -1211,7 +1143,6 @@ IceConnection* IceController::sort_and_switch_connection() {
 
 **为什么 write_state 单独一级？** `writable()` 是二值: true = STATE_WRITABLE(0), false = 其余三个状态。两个都 non-writable 时 `writable()` 打平, 但 UNRELIABLE(1)（刚失联，恢复概率高）比 TIMEOUT(3)（已死）更好——write_state 值越小越"接近"可用。
 
-
 **`ready_to_send`**（`ice_controller.cpp:64`）：
 
 ```cpp
@@ -1316,7 +1247,6 @@ ANSWER 到达
     → _sort_connections_and_update_state
       → _maybe_start_pinging()                            // 密码非空 → start_timer(48ms) ★
 
-
                                 ═══ 稳态循环 ═══
 
 libev timer (48ms / 480ms)
@@ -1349,7 +1279,6 @@ libev timer (48ms / 480ms)
       │
       └─ 升降档: interval 变了? → 重启定时器
 
-
                                 ═══ 收到 STUN Binding Response ═══
 
 UDP 收包
@@ -1366,7 +1295,6 @@ UDP 收包
               ├─ set_write_state(STATE_WRITABLE) → signal_state_change
               └─ set_state(SUCCEEDED)
 
-
                                 ═══ 状态变化触发重排序 ═══
 
 signal_state_change (由 set_write_state / update_receiving 发射)
@@ -1380,7 +1308,6 @@ signal_state_change (由 set_write_state / update_receiving 发射)
       → _update_state()
       → _maybe_start_pinging()  (已启动 → 跳过)
 ```
-
 
 ## 6. ICE 四层状态机
 
@@ -1550,10 +1477,148 @@ IceConnection::_receiving ← 唯一被实际使用的层 (Controller._weak())
 
 ---
 
+## 7. DTLS Transport 深挖
 
-## 7. SDP 字段 → ICE/DTLS 的"最后一公里"
+### 7.1 定位：被动的中间层
 
-### 7.1 字段提取
+`DtlsTransport` 自己不主动做任何事。它坐在 ICE channel 旁边，靠三个信号驱动：
+
+```cpp
+// dtls_transport.cpp:131-138
+DtlsTransport::DtlsTransport(IceTransportChannel* channel) : _channel(channel) {
+    _channel->signal_read_packet.connect(this, &DtlsTransport::_on_read_packet);
+    _channel->signal_writable_state_change.connect(this, &DtlsTransport::_on_writable_state);
+    _channel->signal_receiving_state_change.connect(this, &DtlsTransport::_on_receiving_state);
+}
+```
+
+构造函数不创建 OpenSSL 上下文，不启动握手。只保存指针 + 订阅信号。
+
+### 7.2 三个开工条件——谁最后到谁触发
+
+DtlsTransport 正式启动 DTLS 握手需要三个条件同时满足：
+
+| 条件 | 含义 | 何时就绪 |
+|------|------|---------|
+| `_dtls` 已创建 | OpenSSL DTLS 上下文存在 | `_setup_dtls()` 被调用后 |
+| `_remote_fingerprint_value` 非空 | 客户端 DTLS 证书指纹已知 | ANSWER SDP 到达后 |
+| `_channel->writable()` 为 true | ICE 通道可发送数据 | STUN ping/pong 成功后 |
+
+三个条件由**三个独立事件**交付，以任意顺序到达：
+
+```
+事件 A：收到 DTLS ClientHello (UDP)
+  → _on_read_packet(k_new)
+    → _catched_client_hello 缓存
+    → _setup_dtls()                       ← 条件: _local_certificate 已设置
+        OpenSSL 上下文创建 (_dtls 就绪 ✓)
+        fingerprint 空的 → SetPeerCertificateDigest 跳过
+    → _maybe_start_dtls()
+      → _dtls ✓, fingerprint ✗, writable ✗ → 不启动
+
+事件 B：ANSWER 到达 (TCP)
+  → set_remote_fingerprint()
+    → 存 _remote_fingerprint_alg/value (fingerprint 就绪 ✓)
+    → 如果 _dtls 还没创建 → _setup_dtls()
+    → 如果 _dtls 已存在 (事件A先到) → 补调 SetPeerCertificateDigest()
+    → _maybe_start_dtls()
+      → _dtls ✓, fingerprint ✓, writable ✗ → 不启动
+
+事件 C：ICE writable
+  → _on_writable_state(k_new)
+    → _maybe_start_dtls()
+      → _dtls ✓, fingerprint ✓, writable ✓ → StartSSL! ★
+```
+
+**最后一个到达的事件触发 StartSSL**。这种设计是 DTLS 层与 ICE 层异步解耦的核心——DTLS 不关心 ICE 何时通、SDP 何时到，它只等三者齐全。
+
+### 7.3 `_setup_dtls`：OpenSSL 上下文的创建
+
+`_setup_dtls()`（`dtls_transport.cpp:243-287`）创建完整的 OpenSSL DTLS 服务端上下文，可被多次调用（`_dtls` 不存在时才创建新的）：
+
+```cpp
+bool DtlsTransport::_setup_dtls() {
+    // ① 创建 BIO 适配器: ICE ↔ OpenSSL
+    auto downward = std::make_unique<StreamInterfaceChannel>(_channel);
+    _downward = downward.get();
+
+    // ② 创建 SSLStreamAdapter, 移入 downward (BIO 层)
+    _dtls = SSLStreamAdapter::Create(std::move(downward));
+    _dtls->SetIdentity(_local_certificate->identity()->Clone());
+    _dtls->SetMode(SSL_MODE_DTLS);
+    _dtls->SetMaxProtocolVersion(SSL_PROTOCOL_DTLS_12);
+    _dtls->SetServerRole(SSL_SERVER);       // ★ SFU 是 DTLS 服务端
+
+    // ③ 订阅 OpenSSL 回调
+    _dtls->SignalEvent.connect(this, &_on_dtls_event);             // SE_OPEN/SE_READ/SE_CLOSE
+    _dtls->SignalSSLHandshakeError.connect(this, &_on_dtls_handshake_error);
+
+    // ④ 设置对端指纹 (如果已从 ANSWER 中获得)
+    if (_remote_fingerprint_value.size()) {
+        _dtls->SetPeerCertificateDigest(alg, data, size);
+    }  // 否则留空, 等 set_remote_fingerprint() 补调
+
+    // ⑤ 设置 SRTP 密码套件 (DTLS-SRTP 扩展)
+    _dtls->SetDtlsSrtpCryptoSuites(_srtp_ciphers);
+
+    // ⑥ 尝试启动
+    _maybe_start_dtls();
+    return true;
+}
+```
+
+关键：SFU 作为 `SSL_SERVER`（DTLS 服务端），客户端是 DTLS 客户端（发起 ClientHello）。
+
+### 7.4 `_maybe_start_dtls`：条件启动
+
+```cpp
+void DtlsTransport::_maybe_start_dtls() {
+    if (_dtls && _channel->writable()) {        // 两个硬条件
+        if (_dtls->StartSSL()) {                 // OpenSSL 启动握手
+            _set_dtls_state(k_failed);
+            return;
+        }
+        _set_dtls_state(k_connecting);
+        if (_catched_client_hello.size()) {
+            _handle_dtls_packet(_catched_client_hello);   // 重放缓存的 ClientHello
+            _catched_client_hello.Clear();
+        }
+    }
+}
+```
+
+不一定每次都成功——如果 ICE 没 writable 或 `_dtls` 还没创建，静默返回。设计上允许被多次调用，谁最后一个拿到条件的谁触发。
+
+### 7.5 状态机
+
+```
+k_new ──_maybe_start_dtls(), StartSSL──→ k_connecting
+k_connecting ──_on_dtls_event(SE_OPEN)───→ k_connected
+k_connecting ──_on_dtls_handshake_error──→ k_failed
+k_connected ──_on_dtls_event(SE_CLOSE)───→ k_closed (正常关闭)
+k_connected ──_on_dtls_event(SE_CLOSE + error)──→ k_failed (异常关闭)
+```
+
+终态（`k_failed` / `k_closed`）无恢复机制——进入后只能等上层 STOP 或 k_failed 销毁。
+
+**writable 的生命周期**：k_new 时 mirror ICE writable，k_connected 后由 DTLS 自己管理：
+
+```cpp
+// _on_writable_state(k_new)
+→ _set_writable_state(channel->writable())  // 透传 ICE 状态
+
+// _on_dtls_event(SE_OPEN)
+→ _set_writable_state(true)                 // DTLS 接管
+
+// _on_dtls_event(SE_CLOSE)
+→ _set_writable_state(false)                // DTLS 断开
+```
+
+**后续待深挖**：StreamInterfaceChannel（OpenSSL↔ICE 的 BIO 桥接）、`_handle_dtls_packet`（DTLS Record 校验与注入）、`_on_dtls_event` SE_READ 的解密循环。
+
+## 8. SDP 字段 → ICE/DTLS 的"最后一公里"
+
+### 8.1 字段提取
 
 入口 `PeerConnection::set_remote_sdp()`（`src/pc/peer_connection.cpp:344`）：
 
@@ -1565,7 +1630,7 @@ IceConnection::_receiving ← 唯一被实际使用的层 (Controller._weak())
 
 解析函数 `parse_transport_info()`（`peer_connection.cpp:171-207`）用 `starts_with` 匹配行前缀。提取完存入 `SessionDescription::_transport_infos`。
 
-### 7.2 分发：同一个函数同时喂 ICE 和 DTLS
+### 8.2 分发：同一个函数同时喂 ICE 和 DTLS
 
 `TransportController::set_remote_description()`（`src/pc/transport_controller.cpp:219-245`）：
 
@@ -1588,7 +1653,7 @@ if (td) {
 
 **注意顺序**：先设 ICE 参数，再设 DTLS 指纹。`set_remote_ice_params` 会触发 `_sort_connections_and_update_state()`，可能首次满足 ping 条件并启动 ICE 连通性检查。
 
-### 7.3 ice-ufrag/pwd 的两把密码 + 各自消费点
+### 8.3 ice-ufrag/pwd 的两把密码 + 各自消费点
 
 ICE 涉及**两把**密码，对称分工。规则见 §8.1："发给谁，就用谁的密码"。
 
@@ -1612,7 +1677,7 @@ ICE 涉及**两把**密码，对称分工。规则见 §8.1："发给谁，就�
 
 **注意**：之前说远端密码"不是 HMAC key，只是门控标志位"——这是错的。远端密码既做门控（`_is_pingable`），也做 HMAC key（ping 时构造 MI、收 response 时验证 MI）。"发给谁就用谁的密码"——发给客户端时用客户端密码，正是远端密码。
 
-### 7.4 密码的"先有鸡还是先有蛋"问题
+### 8.4 密码的"先有鸡还是先有蛋"问题
 
 ```mermaid
 sequenceDiagram
@@ -1640,7 +1705,7 @@ void IceConnection::maybe_set_remote_ice_params(const IceParameters& ice_params)
 }
 ```
 
-### 7.5 fingerprint 的两个时序路径
+### 8.5 fingerprint 的两个时序路径
 
 `DtlsTransport::set_remote_fingerprint()`（`src/pc/dtls_transport.cpp:448-500`）：
 
@@ -1660,12 +1725,11 @@ ClientHello 触发 _setup_dtls() → 当时指纹空, SetPeerCertificateDigest �
 
 ---
 
-
-## 8. 三包竞态：STUN / DTLS ClientHello / ANSWER 时序全集
+## 9. 三包竞态：STUN / DTLS ClientHello / ANSWER 时序全集
 
 STUN Binding Request（UDP）、DTLS ClientHello（UDP）、ANSWER SDP（TCP）三者从客户端几乎同时发出，但在服务端以任意顺序到达。
 
-### 8.1 六种时序
+### 9.1 六种时序
 
 | # | 到达顺序 | 发生什么 | 延迟影响 |
 |---|---------|---------|---------|
@@ -1676,7 +1740,7 @@ STUN Binding Request（UDP）、DTLS ClientHello（UDP）、ANSWER SDP（TCP）�
 | **5** | DTLS → ANSWER → STUN | D 被丢弃 → A 到达（无连接）→ S 创建 → 等重传 | **+1s** |
 | **6** | ANSWER → DTLS → STUN | A 到达（无连接）→ D 被丢弃 → S 创建 → 等重传 | **+1s** |
 
-### 8.2 时序 4 详细走读（唯一有延迟损失的路径）
+### 9.2 时序 4 详细走读（唯一有延迟损失的路径）
 
 ```mermaid
 sequenceDiagram
@@ -1709,7 +1773,7 @@ sequenceDiagram
 
 **设计取舍**：UDPPort 不可能为每个未知 UDP 包都缓存（DoS 向量），所以选择"丢弃 + 依赖 DTLS 重传"。+1s 是 RFC 6347 规定的 DTLS 初始重传超时。
 
-### 8.3 `_catched_client_hello` 的真实作用范围
+### 9.3 `_catched_client_hello` 的真实作用范围
 
 只处理 **DTLS ClientHello 在 STUN 之后但在 DTLS 启动之前到达**的情况（时序 1），不处理 D 先于 STUN 到达的情况。
 
@@ -1731,12 +1795,11 @@ sequenceDiagram
 
 ---
 
-
-## 9. 同一个 UDP socket 如何服务三层协议
+## 10. 同一个 UDP socket 如何服务三层协议
 
 同一个 UDP socket、同一个端口，收包走同一条路径，然后在四个分拣层逐级分流。
 
-### 9.1 收包分拣链（完整）
+### 10.1 收包分拣链（完整）
 
 ```mermaid
 graph TD
@@ -1769,7 +1832,7 @@ graph TD
     GetStun2 -->|fingerprint 失败| Drop[静默丢弃, 非 STUN 且无连接]
 ```
 
-### 9.2 四个分拣层
+### 10.2 四个分拣层
 
 | 层级 | 分拣点 | 判断依据 | 去向 |
 |------|--------|---------|------|
@@ -1778,7 +1841,7 @@ graph TD
 | **第 3 层** | `DtlsTransport::_on_read_packet` | `buf[0]` 在 20-63？+ `buf[13]==1`? | DTLS → OpenSSL；其他 → `signal_read_packet` 上交 |
 | **第 4 层** | `DtlsSrtpTransport::_on_read_packet` | `buf[1] & 0x7F` 在 [64,96)? | RTP → `unprotect_rtp`；RTCP → `unprotect_rtcp` |
 
-### 9.3 发包容积链（完整）
+### 10.3 发包容积链（完整）
 
 加密 RTP 的发送路径从上到下贯穿整个栈：
 
@@ -1805,12 +1868,11 @@ graph TD
 
 ---
 
-
-## 10. 信号链：ICE writable → DTLS → SRTP → RTP 就绪
+## 11. 信号链：ICE writable → DTLS → SRTP → RTP 就绪
 
 这是最具"多米诺骨牌效应"的一条链。
 
-### 10.1 信号订阅全景
+### 11.1 信号订阅全景
 
 在 `TransportController::set_local_description()` 中建立：
 
@@ -1861,7 +1923,7 @@ graph LR
 
 ```
 
-### 10.2 多米诺骨牌
+### 11.2 多米诺骨牌
 
 ```mermaid
 sequenceDiagram
@@ -1892,7 +1954,7 @@ sequenceDiagram
 
 ```
 
-### 10.3 PC 状态聚合
+### 11.3 PC 状态聚合
 
 4 个信号源汇聚到 `TransportController::_update_state()`（`src/pc/transport_controller.cpp:128-171`）：
 
@@ -1928,10 +1990,9 @@ graph TD
 
 ---
 
+## 12. RTP/RTCP 数据包处理
 
-## 11. RTP/RTCP 数据包处理
-
-### 11.1 两级解复用
+### 12.1 两级解复用
 
 ```
 UDP 收包 → DtlsTransport (第一级) → DtlsSrtpTransport (第二级)
@@ -1967,7 +2028,7 @@ RtpPacketType infer_rtp_packet_type(ArrayView<const char> packet) {
 
 **PT 区分规则**（RFC 5761）：byte1 的低 7 位在 [64,96) 为 RTCP 保留范围，其余为 RTP。
 
-### 11.2 解密与转发链
+### 12.2 解密与转发链
 
 ```
 DtlsSrtpTransport::_on_read_packet()
@@ -1987,7 +2048,7 @@ DtlsSrtpTransport::_on_read_packet()
 | `_send_session` | 加密发出 | `ssrc_any_outbound`，只允许 `protect_rtp/protect_rtcp` |
 | `_recv_session` | 解密收到 | `ssrc_any_inbound`，只允许 `unprotect_rtp/unprotect_rtcp` |
 
-### 11.3 RtcStreamManager 转发逻辑
+### 12.3 RtcStreamManager 转发逻辑
 
 ```cpp
 // rtc_stream_manager.cpp:193-214
@@ -2014,7 +2075,7 @@ void on_rtcp_packet_received(stream, data, len) {
 
 **RTCP 双向的必要性**：拉流端发 PLI（Picture Loss Indication）请求 I 帧，必须到达推流端；推流端发 SR（Sender Report）让拉流端做音视频同步。
 
-### 11.4 发包路径
+### 12.4 发包路径
 
 ```
 pull_stream->send_rtp(data, len)
@@ -2032,12 +2093,11 @@ pull_stream->send_rtp(data, len)
 
 ---
 
-
-## 12. PULL 流 + SSRC 透传
+## 13. PULL 流 + SSRC 透传
 
 PushStream 和 PullStream 是两个完全独立的媒体栈实例，各有一套 ICE/DTLS/SRTP。两者的连接点只在 `RtcStreamManager`——它从 push 端提取 SSRC 注入 pull 端 offer，并在运行时做 RTP/RTCP 应用层转发。
 
-### 12.1 创建流程
+### 13.1 创建流程
 
 ```
 SignalingWorker::_process_pull()
@@ -2073,7 +2133,7 @@ offer = stream->create_offer();
 _pull_streams[stream_name] = stream;
 ```
 
-### 12.2 PushStream 如何提取 SSRC
+### 13.2 PushStream 如何提取 SSRC
 
 `push_stream.cpp:36-61`——`get_audio_source()` / `get_video_source()` 委托给 `_get_source(mid, source)`：
 
@@ -2097,7 +2157,7 @@ struct StreamParams {
 
 这些数据来自 push 客户端 ANSWER SDP 的 `a=ssrc:` 行解析（`peer_connection.cpp:215-273` 的 `parse_ssrc_info()`）。
 
-### 12.3 PullStream 的 offer 怎么用这些 SSRC
+### 13.3 PullStream 的 offer 怎么用这些 SSRC
 
 ```cpp
 // pull_stream.cpp:22-33
@@ -2127,7 +2187,7 @@ a=ssrc:67890 msid:stream1 video_track
 
 **关键约束**：SFU 不转码，只做 SRTP 解密→重加密。SSRC 是 RTP 包头核心标识，一旦改写，拉流端无法把收到的 RTP 与 SDP 声明的流对应。
 
-### 12.4 PushStream vs PullStream 对比
+### 13.4 PushStream vs PullStream 对比
 
 | 维度 | PushStream | PullStream |
 |------|-----------|-----------|
@@ -2140,8 +2200,7 @@ a=ssrc:67890 msid:stream1 video_track
 
 ---
 
-
-## 13. STOP 与资源清理链
+## 14. STOP 与资源清理链
 
 ### 5.13 两个清理入口
 | 入口 | 触发条件 | 调用栈 |
@@ -2243,8 +2302,7 @@ ICE ping timer (48ms) → _on_check_and_ping()
 
 ---
 
-
-## 14. 完整生命周期时间线
+## 15. 完整生命周期时间线
 
 ### Phase 1 — 媒体栈诞生 (set_local_description)
 
@@ -2349,10 +2407,9 @@ sequenceDiagram
 
 ---
 
+## 16. FAQ：你应该知道但可能没问的问题
 
-## 15. FAQ：你应该知道但可能没问的问题
-
-### 15.1 STUN MESSAGE-INTEGRITY 的密码使用规则："发给谁，就用谁的密码"
+### 16.1 STUN MESSAGE-INTEGRITY 的密码使用规则："发给谁，就用谁的密码"
 
 STUN Binding Request 的 MI 用**接收方**的密码计算，Binding Response 复用**同一个**密码。双方各有自己的 ice-pwd，形成完美的对称：
 
@@ -2367,7 +2424,7 @@ STUN Binding Request 的 MI 用**接收方**的密码计算，Binding Response �
 
 另外，远端密码也是 `_is_pingable` 的门控条件——**密码非空才说明 ANSWER 已到达、对端身份已确认**，此时连接才可 ping。
 
-### 15.2 `DtlsTransport::send_packet()` 为什么绕过 DTLS 加密？
+### 16.2 `DtlsTransport::send_packet()` 为什么绕过 DTLS 加密？
 
 ```cpp
 // src/pc/dtls_transport.cpp:554
@@ -2378,7 +2435,7 @@ int DtlsTransport::send_packet(const char* data, size_t len) {
 
 因为调用者是 `DtlsSrtpTransport::send_rtp()`——数据在到达这里之前**已经被 SRTP 加密过了**。DTLS 只加密握手消息（通过 OpenSSL 内部 BIO write），应用数据不需要经过 DTLS 层。这是 DTLS-SRTP 标准（RFC 5764）的设计：**DTLS 握手 → 密钥导出 → SRTP 接管应用数据**。
 
-### 15.3 30s ICE 超时和 PC 状态 `k_connected` 的关系
+### 16.3 30s ICE 超时和 PC 状态 `k_connected` 的关系
 
 ```cpp
 // src/stream/rtc_stream.cpp:72-78
@@ -2391,7 +2448,7 @@ void ice_timeout_cb(...) {
 
 30s 一次性定时器在 `start()` 时创建。如果 30s 内 PC 到达 `k_connected`，定时器被删除。如果没到达，触发异常清理。这是 ICE/DTLS 握手的总超时兜底。
 
-### 15.4 PushStream 和 PullStream 的 `create_offer()` 本质区别
+### 16.4 PushStream 和 PullStream 的 `create_offer()` 本质区别
 
 ```cpp
 // push_stream.cpp: recvonly → SDP 不含 SSRC
@@ -2400,7 +2457,7 @@ void ice_timeout_cb(...) {
 
 虽然方向不同，但它们调用的是**同一个** `PeerConnection::create_offer()` → **同一个** `TransportController::set_local_description()`。这意味着 PushStream 和 PullStream **各自**拥有独立的 ICE channel、UDP socket、DTLS 上下文、SRTP session。两者之间的 RTP 数据通过 `RtcStreamManager` 做应用层转发：push 收（解密）→ pull 发（加密）。
 
-### 15.5 `DtlsTransport` 和 `DtlsSrtpTransport` 的"组合优于继承"关系
+### 16.5 `DtlsTransport` 和 `DtlsSrtpTransport` 的"组合优于继承"关系
 
 ```mermaid
 graph TD
@@ -2417,7 +2474,7 @@ graph TD
 
 `DtlsTransport` **不知道**自己上面有 `DtlsSrtpTransport`。两者可独立测试。`_maybe_setup_dtls_srtp` 被 `_on_dtls_state`（握手完成信号）和 `set_dtls_transport`（兜底）双触发，内部用 `is_srtp_active() || !is_dtls_writable()` 做幂等——"信号驱动 + 手动兜底"解决时序竞争。
 
-### 15.6 `PeerConnection::destroy()` 延迟析构
+### 16.6 `PeerConnection::destroy()` 延迟析构
 
 ```cpp
 // src/pc/peer_connection.cpp:88-96
@@ -2431,7 +2488,7 @@ void PeerConnection::destroy() {
 
 延迟 10ms 确保当前 event loop 迭代完整退出后才析构。`~PeerConnection()` 设为 private，编译期拦截所有直接 `delete`。
 
-### 15.7 `StreamInterfaceChannel` 的 BIO 桥接
+### 16.7 `StreamInterfaceChannel` 的 BIO 桥接
 
 ```cpp
 // src/pc/dtls_transport.cpp:62-84
@@ -2461,143 +2518,3 @@ class StreamInterfaceChannel {
 两个方向的 `SignalEvent` 含义不同：我们发 `SE_READ` 是"叫 OpenSSL 来读 BufferQueue"，OpenSSL 发 `SE_OPEN` 是"握手完成"、发 `SE_READ` 是"解密数据就绪"。谁点火、谁接收是关键区分。
 
 ---
-
-## 16. DTLS Transport 深挖
-
-### 16.1 定位：被动的中间层
-
-`DtlsTransport` 自己不主动做任何事。它坐在 ICE channel 旁边，靠三个信号驱动：
-
-```cpp
-// dtls_transport.cpp:131-138
-DtlsTransport::DtlsTransport(IceTransportChannel* channel) : _channel(channel) {
-    _channel->signal_read_packet.connect(this, &DtlsTransport::_on_read_packet);
-    _channel->signal_writable_state_change.connect(this, &DtlsTransport::_on_writable_state);
-    _channel->signal_receiving_state_change.connect(this, &DtlsTransport::_on_receiving_state);
-}
-```
-
-构造函数不创建 OpenSSL 上下文，不启动握手。只保存指针 + 订阅信号。
-
-### 16.2 三个开工条件——谁最后到谁触发
-
-DtlsTransport 正式启动 DTLS 握手需要三个条件同时满足：
-
-| 条件 | 含义 | 何时就绪 |
-|------|------|---------|
-| `_dtls` 已创建 | OpenSSL DTLS 上下文存在 | `_setup_dtls()` 被调用后 |
-| `_remote_fingerprint_value` 非空 | 客户端 DTLS 证书指纹已知 | ANSWER SDP 到达后 |
-| `_channel->writable()` 为 true | ICE 通道可发送数据 | STUN ping/pong 成功后 |
-
-三个条件由**三个独立事件**交付，以任意顺序到达：
-
-```
-事件 A：收到 DTLS ClientHello (UDP)
-  → _on_read_packet(k_new)
-    → _catched_client_hello 缓存
-    → _setup_dtls()                       ← 条件: _local_certificate 已设置
-        OpenSSL 上下文创建 (_dtls 就绪 ✓)
-        fingerprint 空的 → SetPeerCertificateDigest 跳过
-    → _maybe_start_dtls()
-      → _dtls ✓, fingerprint ✗, writable ✗ → 不启动
-
-事件 B：ANSWER 到达 (TCP)
-  → set_remote_fingerprint()
-    → 存 _remote_fingerprint_alg/value (fingerprint 就绪 ✓)
-    → 如果 _dtls 还没创建 → _setup_dtls()
-    → 如果 _dtls 已存在 (事件A先到) → 补调 SetPeerCertificateDigest()
-    → _maybe_start_dtls()
-      → _dtls ✓, fingerprint ✓, writable ✗ → 不启动
-
-事件 C：ICE writable
-  → _on_writable_state(k_new)
-    → _maybe_start_dtls()
-      → _dtls ✓, fingerprint ✓, writable ✓ → StartSSL! ★
-```
-
-**最后一个到达的事件触发 StartSSL**。这种设计是 DTLS 层与 ICE 层异步解耦的核心——DTLS 不关心 ICE 何时通、SDP 何时到，它只等三者齐全。
-
-### 16.3 `_setup_dtls`：OpenSSL 上下文的创建
-
-`_setup_dtls()`（`dtls_transport.cpp:243-287`）创建完整的 OpenSSL DTLS 服务端上下文，可被多次调用（`_dtls` 不存在时才创建新的）：
-
-```cpp
-bool DtlsTransport::_setup_dtls() {
-    // ① 创建 BIO 适配器: ICE ↔ OpenSSL
-    auto downward = std::make_unique<StreamInterfaceChannel>(_channel);
-    _downward = downward.get();
-
-    // ② 创建 SSLStreamAdapter, 移入 downward (BIO 层)
-    _dtls = SSLStreamAdapter::Create(std::move(downward));
-    _dtls->SetIdentity(_local_certificate->identity()->Clone());
-    _dtls->SetMode(SSL_MODE_DTLS);
-    _dtls->SetMaxProtocolVersion(SSL_PROTOCOL_DTLS_12);
-    _dtls->SetServerRole(SSL_SERVER);       // ★ SFU 是 DTLS 服务端
-
-    // ③ 订阅 OpenSSL 回调
-    _dtls->SignalEvent.connect(this, &_on_dtls_event);             // SE_OPEN/SE_READ/SE_CLOSE
-    _dtls->SignalSSLHandshakeError.connect(this, &_on_dtls_handshake_error);
-
-    // ④ 设置对端指纹 (如果已从 ANSWER 中获得)
-    if (_remote_fingerprint_value.size()) {
-        _dtls->SetPeerCertificateDigest(alg, data, size);
-    }  // 否则留空, 等 set_remote_fingerprint() 补调
-
-    // ⑤ 设置 SRTP 密码套件 (DTLS-SRTP 扩展)
-    _dtls->SetDtlsSrtpCryptoSuites(_srtp_ciphers);
-
-    // ⑥ 尝试启动
-    _maybe_start_dtls();
-    return true;
-}
-```
-
-关键：SFU 作为 `SSL_SERVER`（DTLS 服务端），客户端是 DTLS 客户端（发起 ClientHello）。
-
-### 16.4 `_maybe_start_dtls`：条件启动
-
-```cpp
-void DtlsTransport::_maybe_start_dtls() {
-    if (_dtls && _channel->writable()) {        // 两个硬条件
-        if (_dtls->StartSSL()) {                 // OpenSSL 启动握手
-            _set_dtls_state(k_failed);
-            return;
-        }
-        _set_dtls_state(k_connecting);
-        if (_catched_client_hello.size()) {
-            _handle_dtls_packet(_catched_client_hello);   // 重放缓存的 ClientHello
-            _catched_client_hello.Clear();
-        }
-    }
-}
-```
-
-不一定每次都成功——如果 ICE 没 writable 或 `_dtls` 还没创建，静默返回。设计上允许被多次调用，谁最后一个拿到条件的谁触发。
-
-### 16.5 状态机
-
-```
-k_new ──_maybe_start_dtls(), StartSSL──→ k_connecting
-k_connecting ──_on_dtls_event(SE_OPEN)───→ k_connected
-k_connecting ──_on_dtls_handshake_error──→ k_failed
-k_connected ──_on_dtls_event(SE_CLOSE)───→ k_closed (正常关闭)
-k_connected ──_on_dtls_event(SE_CLOSE + error)──→ k_failed (异常关闭)
-```
-
-终态（`k_failed` / `k_closed`）无恢复机制——进入后只能等上层 STOP 或 k_failed 销毁。
-
-**writable 的生命周期**：k_new 时 mirror ICE writable，k_connected 后由 DTLS 自己管理：
-
-```cpp
-// _on_writable_state(k_new)
-→ _set_writable_state(channel->writable())  // 透传 ICE 状态
-
-// _on_dtls_event(SE_OPEN)
-→ _set_writable_state(true)                 // DTLS 接管
-
-// _on_dtls_event(SE_CLOSE)
-→ _set_writable_state(false)                // DTLS 断开
-```
-
-**后续待深挖**：StreamInterfaceChannel（OpenSSL↔ICE 的 BIO 桥接）、`_handle_dtls_packet`（DTLS Record 校验与注入）、`_on_dtls_event` SE_READ 的解密循环。
-
