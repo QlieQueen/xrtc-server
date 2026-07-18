@@ -1589,7 +1589,23 @@ void DtlsTransport::_maybe_start_dtls() {
 
 不一定每次都成功——如果 ICE 没 writable 或 `_dtls` 还没创建，静默返回。设计上允许被多次调用，谁最后一个拿到条件的谁触发。
 
-### 7.5 状态机
+### 7.5 为什么 `_on_writable_state` 不需要调 `_setup_dtls`
+
+`_setup_dtls()` 的两个触发事件（DTLS ClientHello 和 ANSWER）**永远早于** ICE writable 到达：
+
+```
+ClientHello + STUN (并发)          ANSWER (TCP)            ICE writable
+──────────────────────────────────────────────────────────────────────
+t0+rtt: 同时到达 SFU              t_full: 到达             t_full+*: 最晚
+  → _on_read_packet(k_new)          → set_remote_fingerprint
+    → _setup_dtls() ★                 → 补 SetPeerCertificateDigest
+```
+
+ICE writable 最快也要 `rtt + ANSWER传输时间 + 至少1个ping周期(48ms)`，而 DTLS ClientHello 在 `rtt` 后就到了，ANSWER 通过 TCP 也比 ICE writable 早。**它们之间差了至少一个 TCP 往返 + 48ms 定时器周期。**
+
+所以 `_on_writable_state(k_new)` 被触发时，`_dtls` 已创建、fingerprint 已设置、`_catched_client_hello` 里几乎一定已经有数据等着被重放。它只负责**最后一脚**——`_maybe_start_dtls()`。
+
+### 7.6 状态机
 
 ```
 k_new ──_maybe_start_dtls(), StartSSL──→ k_connecting
