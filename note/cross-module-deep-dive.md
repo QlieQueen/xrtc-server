@@ -1926,6 +1926,206 @@ sequenceDiagram
 | `SE_CLOSE` (error≠0) | 握手失败或异常断开 | state=k_failed |
 | `Read()→SR_EOS` | SE_READ 循环中读到 close_notify | 与 SE_CLOSE(error=0) 同效果 |
 
+### 7.12 SRTP 模块（DtlsSrtpTransport）完整生命周期
+
+SRTP 模块的切入点就是 DTLS 的终点——`k_connected`。
+
+**第一幕：出生（set_local_description）**
+
+```cpp
+// transport_controller.cpp:69-76
+DtlsSrtpTransport* dtls_srtp = new DtlsSrtpTransport("audio", true);
+dtls_srtp->set_dtls_transport(dtls_transport, nullptr);
+
+// set_dtls_transport:
+_rtp_dtls_transport->signal_dtls_state.connect(this, &_on_dtls_state);    // 等握手完成
+_rtp_dtls_transport->signal_read_packet.connect(this, &_on_read_packet);  // 收包入口
+_maybe_setup_dtls_srtp();  // 兜底调用 (实际不会命中, DTLS 还是 k_new)
+```
+
+此时 `_send_session` = null, `_recv_session` = null。`is_srtp_active()` = false。protect/unprotect 调用会被直接拒绝。
+
+**第二幕：等待（ICE + DTLS 握手期间）**
+
+SRTP 不干活。DTLS 还在握手中，没有主密钥，无法派生 SRTP 密钥。`_on_read_packet` 收包正常走——但 DTLS `k_new` 时只缓存 ClientHello、其余丢弃；`k_connecting` 时非 DTLS 包（RTP/RTCP）也被丢弃，因为客户端还没协商好 SRTP 密钥，发来的数据无法解密。RTP 要到 `k_connected` 后才会被 `signal_read_packet` 上交。
+
+**第三幕：激活（DTLS k_connected）——密钥导出 + Session 创建**
+
+唯一触发源：`signal_dtls_state(k_connected)` → `_on_dtls_state` → `_maybe_setup_dtls_srtp` → `_setup_dtls_srtp`：
+
+```cpp
+void _setup_dtls_srtp() {
+    _extract_params(dtls, &crypto_suite, &send_key, &recv_key);
+    set_rtp_params(send_cs, send_key, ..., recv_cs, recv_key, ...);
+}
+```
+
+**密钥导出 `_extract_params`（`dtls_srtp_transport.cpp:239-285`）**：
+
+① 获取 DTLS 协商的 crypto suite → 确定 key_len / salt_len。以 `SRTP_AES128_CM_SHA1_80` 为例：key_len=16, salt_len=14。
+
+② 调用 `SSL_export_keying_material("EXTRACTOR-dtls_srtp", ...)`（RFC 5705）。DTLS 握手过程中双方各自派生出一段密钥材料，**只要 DTLS 握手成功，双方得到的 keying material 完全相同**。
+
+③ 导出的 `dtls_buffer` 结构（总大小 = 2 × (key_len + salt_len)）：
+
+```
+dtls_buffer:
+  [ client_write_key  | server_write_key  | client_write_salt | server_write_salt ]
+    ← key_len bytes →   ← key_len bytes →   ← salt_len bytes →  ← salt_len bytes →
+```
+
+④ 拆分 + 分配方向：
+
+```cpp
+// 代码: dtls_srtp_transport.cpp:270-282
+memcpy(&client_write_key[0],          &dtls_buffer[0],                    key_len);
+memcpy(&server_write_key[0],          &dtls_buffer[key_len],              key_len);
+memcpy(&client_write_key[key_len],    &dtls_buffer[2*key_len],            salt_len);
+memcpy(&server_write_key[key_len],    &dtls_buffer[2*key_len + salt_len], salt_len);
+
+*send_key = server_write_key;  // server_key + server_salt → SFU 加密发出
+*recv_key = client_write_key;  // client_key + client_salt   → SFU 解密收到
+```
+
+| 方向 | 密钥构成 | 用途 |
+|------|---------|------|
+| send_key | server_write_key + server_write_salt | `_send_session` 加密 SFU → 客户端的 RTP/RTCP |
+| recv_key | client_write_key + client_write_salt | `_recv_session` 解密客户端 → SFU 的 RTP/RTCP |
+
+**为什么是 server_write_key 作为 send_key？** SFU 是 DTLS 服务端（`SSL_SERVER`）。`server_write_key` 是服务端用来写（加密发出）的密钥，客户端用它来读（解密收到）。`client_write_key` 是客户端用来写（加密发出）的，SFU 用它来读（解密收到）。命名从 TLS 握手角色的视角出发，跟媒体收发方向无关。
+
+**Session 创建 `set_rtp_params`（`srtp_transport.cpp:13-49`）**：
+
+首次调用时 `_send_session` 和 `_recv_session` 为空，走 `_create_srtp_session()` + `set_send`/`set_recv`。若 DTLS 断开后重连则走 `update_send`/`update_recv` 更新密钥：
+
+```cpp
+_send_session.reset(new SrtpSession());  // ssrc_any_outbound → 只允许 protect
+_recv_session.reset(new SrtpSession());  // ssrc_any_inbound  → 只允许 unprotect
+```
+
+`set_rtp_params` 首次调用时 `_send_session` 和 `_recv_session` 为空，走 `_create_srtp_session()` + `set_send`/`set_recv` 路径。若 DTLS 断开后重连，则走 `update_send`/`update_recv` 更新密钥：
+
+```cpp
+_send_session.reset(new SrtpSession());  // ssrc_any_outbound → 只允许 protect
+_recv_session.reset(new SrtpSession());  // ssrc_any_inbound  → 只允许 unprotect
+```
+
+之后 `is_srtp_active()` = true。方向隔离：`_send_session` 只能加密，`_recv_session` 只能解密。
+
+**第四幕：工作**
+
+收：`_on_read_packet` → `infer_rtp_packet_type` → `_on_rtp_packet_received` → `unprotect_rtp`（`_recv_session`）→ `signal_rtp_packet_received`。
+
+发：`send_rtp(data, len)` → `protect_rtp`（`_send_session`）→ `_rtp_dtls_transport->send_packet` → ICE → UDP。
+
+```
+set_local_description()     DTLS SE_OPEN          is_srtp_active()=true
+     │                           │                       │
+     ▼                           ▼                       ▼
+  ┌──────-┐  DTLS handshake  ┌──────┐  密钥导出+创建      ┌──────-┐
+  │ 空壳   │ ──────────────→  │ 等待  │ ───────────────→ │ 就绪   │
+  │session│                  │      │                   │session│
+  │=null  │                  │=null │                   │=valid │
+  └──────-┘                  └──────┘                   └──────-┘
+  protect: 拒绝            protect: 拒绝             protect: 加密
+  unprotect: 拒绝          unprotect: 拒绝           unprotect: 解密
+```
+
+### 7.13 libsrtp 全局初始化：引用计数
+
+libsrtp 有两级 API：
+
+| 级别 | API | 调用次数 | 含义 |
+|------|-----|---------|------|
+| 库级 | `srtp_init()` / `srtp_shutdown()` | 全局各一次 | 注册算法、分配全局状态 |
+| 会话级 | `srtp_create()` / `srtp_protect()` / `srtp_dealloc()` | 每个 SrtpSession 各一次 | 创建独立的安全上下文 |
+
+```cpp
+// 全局引用计数
+int g_libsrtp_usage_count = 0;          // 当前活跃的 SrtpSession 数量
+GlobalMutex g_libsrtp_lock;             // 保护计数
+
+// 首个 SrtpSession 构造 → srtp_init()
+// 末个 SrtpSession 析构   → srtp_shutdown()
+```
+
+多流场景下，PushStream 和 PullStream 各自有 SrtpSession。**谁最后一个销毁 SrtpSession，谁负责 `srtp_shutdown()`**。
+
+**潜在隐患**：最后一个 SrtpSession 析构调 `srtp_shutdown()` 时，如果另一个线程正在创建新 session 调 `srtp_init()`——存在竞态。
+
+**优化方案**：改为单例。进程启动时 `srtp_init()`，进程退出时 `srtp_shutdown()`。每个 SrtpSession 创建时向单例注册指针，`srtp_install_event_handler` 的 thunk 通过单例查表分派事件到对应 session。生命周期跟进程绑定，消除引用计数的并发隐患。待后续评估。
+
+### 7.14 `_do_set_key`：与 libsrtp 引擎的对接口
+
+`_do_set_key`（`srtp_session.cpp:253-305`）是 `set_send` / `set_recv` / `update_send` / `update_recv` 的底层实现。它构造一个 `srtp_policy_t`，首次调用走 `srtp_create`，后续 DTLS 重连走 `srtp_update`。
+
+**① 清零 + 查表填密码参数**：
+
+```cpp
+srtp_policy_t policy;
+memset(&policy, 0, sizeof(policy));
+
+srtp_crypto_policy_set_from_profile_for_rtp(&policy.rtp, cs);
+srtp_crypto_policy_set_from_profile_for_rtcp(&policy.rtcp, cs);
+// cs = SRTP_AES128_CM_SHA1_80 → cipher=AES-128-CTR, cipher_key_len=16, auth_tag_len=10
+```
+
+**② 方向隔离**：
+
+```cpp
+policy.ssrc.type = ssrc_any_outbound;  // outbound → 只能 srtp_protect (加密)
+policy.ssrc.type = ssrc_any_inbound;   // inbound  → 只能 srtp_unprotect (解密)
+policy.ssrc.value = 0;                 // 匹配任意 SSRC
+```
+
+`_send_session` 永远用 `ssrc_any_outbound`，`_recv_session` 永远用 `ssrc_any_inbound`。libsrtp 内部强制执行——outbound session 调 `srtp_unprotect` 会直接报错。
+
+**③ 防重放窗口**：
+
+```cpp
+policy.window_size = 1024;     // 允许序列号乱序 1024 个包
+policy.allow_repeat_tx = 1;    // 允许重复发送 (RTCP 重传)
+```
+
+RTP 序列号 16 位，会回转。`window_size = 1024` 表示"往前跳 1024 个 seqnum 仍然接受"。
+
+**④ 创建或更新**：
+
+```cpp
+if (!_session) {
+    srtp_create(&_session, &policy);        // 首次
+    srtp_set_user_data(_session, this);     // 存 this 指针供事件回调
+} else {
+    srtp_update(_session, &policy);          // DTLS 重连, 更新密钥
+}
+```
+
+**⑤ `auth_tag_len` 和加密时的 buffer 扩容**：
+
+```cpp
+_rtp_auth_tag_len = policy.rtp.auth_tag_len;    // 10
+_rtcp_auth_tag_len = policy.rtcp.auth_tag_len;  // 10
+```
+
+加密时 libsrtp 在数据尾部追加 auth tag，buffer 必须提前扩容，否则越界写：
+
+```
+RTP 加密后:  [RTP Header][Encrypted Payload][AuthTag: 10B]
+RTCP 加密后: [RTCP Header][Encrypted Payload][SRTCP Index: 4B][AuthTag: 10B]
+```
+
+RTCP 额外多 4 字节 SRTCP index——RTCP 包头没有 sequence number 字段，libsrtp 加密时在尾部插入一个 4 字节 index 用作防重放。所以扩容不同：
+
+```cpp
+// send_rtp: 只需要 auth_tag_len
+CopyOnWriteBuffer packet(data, len, len + rtp_auth_tag_len);
+
+// send_rtcp: 需要 auth_tag_len + 4 (SRTCP index)
+CopyOnWriteBuffer packet(data, len, len + rtcp_auth_tag_len + sizeof(uint32_t));
+```
+
+解密时反操作——`unprotect_rtp` / `unprotect_rtcp` 验证 auth tag 后，`out_len` 比 `in_len` 小（auth tag 被剥离），调用方 `SetSize(out_len)` 截短 buffer。
+
 ## 8. SDP 字段 → ICE/DTLS 的"最后一公里"
 
 ### 8.1 字段提取
