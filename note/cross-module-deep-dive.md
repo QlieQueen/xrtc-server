@@ -1749,6 +1749,46 @@ ICE 层已经把 STUN 过滤掉，到达此处的包按 DtlsTransport 状态分�
 | `k_connected` | 非 DTLS 非 RTP | 丢弃并打警告 |
 | `k_failed` / `k_closed` | 任意 | 忽略 |
 
+### 7.10 `_handle_dtls_packet`：DTLS Record 结构校验
+
+`_handle_dtls_packet` 不是解析 DTLS 握手内容——那由 OpenSSL 自己干。它做的是一层**TLV 结构完整性校验**，防止畸形包让 OpenSSL 读越界。
+
+**DTLS Record 格式（RFC 6347）**：
+
+```
+Byte 0:       ContentType    (1B)  — 20=ChangeCipherSpec, 21=Alert, 22=Handshake, 23=AppData
+Byte 1-2:     Version        (2B)  — DTLS 1.2 = 0xFEFD
+Byte 3-4:     Epoch          (2B)
+Byte 5-10:    Sequence Num   (6B)
+Byte 11-12:   Length         (2B)  — 大端序, payload 字节数
+Byte 13+:     Payload              — Length 指定的字节数
+```
+
+头固定 13 字节（`k_dtls_record_header_len`）。本质是 TLV 思想：读 Length → 跳 Value → 读下一个 Record → 直到 buffer 刚好耗尽。
+
+```cpp
+bool _handle_dtls_packet(const char* data, size_t size) {
+    const uint8_t* tmp_data = reinterpret_cast<const uint8_t*>(data);
+    size_t tmp_size = size;
+
+    while (tmp_size > 0) {
+        if (tmp_size < 13) return false;                        // 不够一个头
+
+        size_t record_len = (tmp_data[11] << 8) | tmp_data[12]; // 读 Length (大端序)
+        if (record_len + 13 > tmp_size) return false;            // 超限 → 畸形包
+
+        tmp_data += 13 + record_len;                             // 跳到下一个 Record
+        tmp_size -= 13 + record_len;
+    }
+    // 所有 Record 刚好覆盖整个 buffer → 合法
+    return _downward->on_received_packet(data, size);            // 整包注入 OpenSSL
+}
+```
+
+**一个 UDP 包可包含多个 DTLS Record**（RFC 6347 允许）。握手密集时 ServerHello + Certificate + ServerKeyExchange 可能合并在一个包送达，while 循环处理这种情形。
+
+**它不做什么**：不解密、不解析握手消息体、不校验 MAC、不检查 ContentType（前面 `is_dtls_packet` 已校验过 `buf[0]` 在 20..63）。只回答一个问题——**Record 边界合法吗？合法就整包给 OpenSSL。**
+
 ## 8. SDP 字段 → ICE/DTLS 的"最后一公里"
 
 ### 8.1 字段提取
