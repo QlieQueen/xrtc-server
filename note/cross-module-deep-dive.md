@@ -176,8 +176,71 @@ RFC 8122 将这种模式称为 "Certificate Fingerprint"——SDP 中携带的 f
 
 **两层认证，三份证书**：HTTPS（证书 ①）保护信令面的 SDP 交换 → SDP 中的 fingerprint 成为媒体面的信任锚 → DTLS 握手（证书 ②+③）通过 fingerprint 比对完成双方身份认证 → 握手主密钥派生 SRTP 加密密钥。
 
----
+### 1.8 证书、指纹、公钥的关系
 
+三者容易混淆，核心关系一句话：**公钥嵌在证书里，指纹是证书的哈希，证书在 DTLS 握手的 Certificate 报文中发送。**
+
+**证书（Certificate）= 公钥的容器**：
+
+```
+X.509 证书内容:
+  ├─ Subject Public Key       ← 公钥在这里! (RSA 或 ECDSA)
+  ├─ Subject / Issuer         ← 身份信息
+  ├─ Validity Period          ← 有效期 (365天)
+  └─ Signature                ← 用自己的私钥签名 (自签名)
+```
+
+`set_local_certificate()` → `_dtls->SetIdentity(cert->identity())` 把证书交给 OpenSSL。SetIdentity 只管"**我**是谁"——告诉 OpenSSL 握手时用这个证书证明自己的身份。
+
+**指纹（Fingerprint）= 证书的 SHA-256 哈希**：
+
+```cpp
+// session_description.cpp:114 — offer 生成时
+tdesc->identity_fingerprint = SSLFingerprint::CreateFromCertificate(*certificate);
+// = SHA-256(整个证书的 DER 编码) → "AA:BB:CC:DD:..."
+```
+
+指纹本身不包含公钥——它是证书的"身份证号"。SDP 中 `a=fingerprint:sha-256 AA:BB:CC:...` 传的就是这个哈希值。
+
+`set_remote_fingerprint()` → `_dtls->SetPeerCertificateDigest(alg, data, size)` 告诉 OpenSSL "**对端**的证书指纹应该是这个，不匹配就拒绝握手"。
+
+**公钥在哪？什么时候发给对方？**
+
+公钥嵌在证书里，证书在 DTLS 握手的 **Certificate 报文**中发送。回到抓包：
+
+```
+② Server Flight:
+   ServerHello
+   Certificate ★               ← SFU 的证书! 公钥在这里!
+   ServerKeyExchange           ← 密钥交换参数 (与公钥配合完成密钥协商)
+   CertificateRequest          ← "客户端, 把你的证书也发过来"
+   ServerHelloDone
+
+③ Client Flight:
+   Certificate ★               ← 客户端的证书! 公钥在这里!
+   ClientKeyExchange           ← 客户端密钥交换参数
+   CertificateVerify           ← 用客户端私钥签名, 证明"我持有这个证书"
+   ChangeCipherSpec
+   EncryptedHandshakeMessage
+```
+
+**验证闭环**：
+
+```
+SFU 侧:
+  ① SDP offer 发出自己的 fingerprint "AA:BB:CC..."
+  ② DTLS 握手 Server Flight → Certificate 报文 → 客户端收到 SFU 的证书
+  ③ 客户端: SHA-256(收到的证书) → 和 offer 的 "AA:BB:CC..." 比对 → 匹配 ✓
+
+  ④ SDP answer 收到客户端的 fingerprint "XX:YY:ZZ..."
+     → set_remote_fingerprint → SetPeerCertificateDigest("XX:YY:ZZ...")
+  ⑤ DTLS 握手 Client Flight → Certificate 报文 → SFU 收到客户端的证书
+  ⑥ OpenSSL: SHA-256(收到的证书) → 和 SetPeerCertificateDigest 的 "XX:YY:ZZ..." 比对 → 匹配 ✓
+```
+
+**为什么"带外"传递指纹？** 指纹走 HTTPS（信令信道），证书 + 公钥走 UDP（媒体信道）。攻击者即使截获了 DTLS 的 Certificate 报文，也无法伪造证书——因为他不知道 SDP 里的 fingerprint 值，伪造的证书哈希对不上。HTTPS 保护了 fingerprint 的传输安全，fingerprint 保护了 DTLS 证书的真实性。
+
+---
 ## 2. TCP 信令 vs UDP 媒体：同一 libev LT 下的两种 I/O 哲学
 
 libev 只有 LT（水平触发）模式，但 TCP 和 UDP 在 LT 下的读写策略截然不同。核心原因是**字节流 vs 数据报**的本质差异。
