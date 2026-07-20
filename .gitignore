@@ -6,3 +6,4 @@ CMakeFiles/
 Testing/
 Makefile
 compile_commands.json
+note/cross-module-deep-dive.pdf
