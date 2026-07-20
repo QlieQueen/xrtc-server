@@ -1789,6 +1789,77 @@ bool _handle_dtls_packet(const char* data, size_t size) {
 
 **它不做什么**：不解密、不解析握手消息体、不校验 MAC、不检查 ContentType（前面 `is_dtls_packet` 已校验过 `buf[0]` 在 20..63）。只回答一个问题——**Record 边界合法吗？合法就整包给 OpenSSL。**
 
+### 7.11 DTLS 握手时序 + 状态变化
+
+**图 A：握手启动 → SE_OPEN**
+
+```mermaid
+sequenceDiagram
+    participant Client as 客户端
+    participant ICE as ICE Channel
+    participant DTLS as DtlsTransport
+    participant SSL as OpenSSL
+
+    Client->>ICE: ClientHello (UDP)
+    ICE->>DTLS: signal_read_packet (k_new)
+    Note over DTLS: _catched_client_hello 缓存, _setup_dtls()
+
+    Note over DTLS: ANSWER(fingerprint) + ICE writable 就绪
+    DTLS->>DTLS: _maybe_start_dtls() → StartSSL → k_connecting
+
+    SSL->>DTLS: BIO Write: ServerHello + Certificate + ServerKeyExchange + CertificateRequest + ServerHelloDone
+    DTLS->>ICE: send_packet
+    ICE->>Client: Server Flight (UDP)
+
+    Client->>ICE: Certificate + ClientKeyExchange + CertificateVerify + ChangeCipherSpec + Finished (UDP)
+    ICE->>DTLS: signal_read_packet (k_connecting)
+    DTLS->>SSL: _handle_dtls_packet → BufferQueue → SignalEvent(SE_READ)
+
+    SSL->>DTLS: BIO Write: NewSessionTicket + ChangeCipherSpec + Finished
+    DTLS->>ICE: send_packet
+    ICE->>Client: Server Final Flight (UDP)
+
+    SSL->>DTLS: sigslot SignalEvent(SE_OPEN) ★
+    DTLS->>DTLS: _set_writable_state(true)
+    DTLS->>DTLS: _set_dtls_state(k_connected)
+    Note over DTLS: signal_dtls_state → DtlsSrtpTransport → SRTP 密钥导出
+```
+
+**图 B：应用数据期间（DTLS 层空闲）**
+
+```
+RTP/RTCP 经 SRTP 收发, DTLS 层不参与。
+_on_dtls_event 的 SE_READ(SR_SUCCESS) 分支在此架构下几乎不触发。
+```
+
+**图 C：关闭 → SE_CLOSE**
+
+```mermaid
+sequenceDiagram
+    participant Client as 客户端
+    participant ICE as ICE Channel
+    participant DTLS as DtlsTransport
+    participant SSL as OpenSSL
+
+    Client->>ICE: Encrypted Alert close_notify (UDP)
+    ICE->>DTLS: signal_read_packet (k_connected)
+    DTLS->>SSL: _handle_dtls_packet → 注入
+    Note over SSL: 检测到 close_notify
+
+    SSL->>DTLS: sigslot SignalEvent(SE_CLOSE)
+    DTLS->>DTLS: _set_writable_state(false)
+    DTLS->>DTLS: _set_dtls_state(k_closed)
+```
+
+**`_on_dtls_event` 的三个信号总结**：
+
+| 信号 | 触发时机 | 动作 |
+|------|---------|------|
+| `SE_OPEN` | 握手完成（Server Finished 发出后） | writable=true, state=k_connected |
+| `SE_CLOSE` (error=0) | 对端发 close_notify | writable=false, state=k_closed |
+| `SE_CLOSE` (error≠0) | 握手失败或异常断开 | state=k_failed |
+| `Read()→SR_EOS` | SE_READ 循环中读到 close_notify | 与 SE_CLOSE(error=0) 同效果 |
+
 ## 8. SDP 字段 → ICE/DTLS 的"最后一公里"
 
 ### 8.1 字段提取
