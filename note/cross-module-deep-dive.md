@@ -240,6 +240,8 @@ SFU 侧:
 
 **为什么"带外"传递指纹？** 指纹走 HTTPS（信令信道），证书 + 公钥走 UDP（媒体信道）。攻击者即使截获了 DTLS 的 Certificate 报文，也无法伪造证书——因为他不知道 SDP 里的 fingerprint 值，伪造的证书哈希对不上。HTTPS 保护了 fingerprint 的传输安全，fingerprint 保护了 DTLS 证书的真实性。
 
+**关键澄清**：指纹**不能**反推出证书——SHA-256 是单向哈希。`Hash(证书) → 指纹` 可行，`指纹 → 证书` 不可能。但 SHA-256 的碰撞抵抗保证了两份不同证书产生相同指纹的概率可忽略不计，所以**指纹匹配 = 证书唯一确认**。
+
 ---
 ## 2. TCP 信令 vs UDP 媒体：同一 libev LT 下的两种 I/O 哲学
 
@@ -2013,23 +2015,53 @@ void IceConnection::maybe_set_remote_ice_params(const IceParameters& ice_params)
 }
 ```
 
-### 8.5 fingerprint 的两个时序路径
+### 8.5 `set_remote_fingerprint`：三种时序 + 两种边界
 
-`DtlsTransport::set_remote_fingerprint()`（`src/pc/dtls_transport.cpp:448-500`）：
+```cpp
+bool set_remote_fingerprint(digest_alg, digest_data, digest_len) {
+    // ① 幂等: 同样的指纹 → 忽略
+    if (same as before) return true;
 
-**路径 A（正常：ANSWER 先到）**：
-```
-set_remote_fingerprint → 存 _remote_fingerprint_alg/value
-  → _dtls 还不存在 → 跳过两个 if
-  → _setup_dtls() → SetPeerCertificateDigest(已存的指纹) → 一把配好
+    // ② 客户端不支持 DTLS (alg 为空) → 禁用 DTLS
+    if (alg.empty()) { _dtls_active = false; return false; }
+
+    // ③ 本地证书还没设置 → 拒绝 (必须先 set_local_certificate)
+    if (!_dtls_active) return false;
+
+    // ④ 判断是否指纹变更
+    bool is_fingerprint_change = _remote_fingerprint_alg.size() > 0;
+    存入新的 fingerprint;
+
+    // ⑤ 路径 A: _dtls 已存在 (ClientHello 先到触发了 _setup_dtls, 但当时缺指纹)
+    //          → 对已有的 OpenSSL 上下文补调 SetPeerCertificateDigest
+    if (_dtls && !is_fingerprint_change) {
+        _dtls->SetPeerCertificateDigest(...);
+        return true;
+    }
+
+    // ⑥ 路径 B: 指纹变更 (收到不同的 answer SDP)
+    //          → 销毁旧 _dtls 重建
+    if (_dtls && is_fingerprint_change) {
+        _dtls.reset();
+        _set_dtls_state(k_new);
+    }
+
+    // ⑦ 路径 C: _dtls 不存在 (ANSWER 正常先到)
+    //          → _setup_dtls 内部读已存的指纹, 一把配好
+    _setup_dtls();
+}
 ```
 
-**路径 B（乱序：ClientHello 先到）**：
-```
-ClientHello 触发 _setup_dtls() → 当时指纹空, SetPeerCertificateDigest 被跳过
-  → ANSWER 后到 → _dtls 已存在 && !is_fingerprint_change
-  → 直接对已创建的 _dtls 补调 SetPeerCertificateDigest  (line 475-482)
-```
+| 分支 | 触发场景 | 行为 |
+|------|---------|------|
+| ① 幂等 | 相同 fingerprint 重复调用 | 忽略 |
+| ② 不支持 | 客户端 SDP 无 fingerprint 行 | 禁用 DTLS |
+| ③ 顺序错 | `set_local_certificate` 没调就调了这个 | 拒绝 |
+| ⑤ 路径 A | ClientHello 先到 → `_setup_dtls` 跳过了指纹 → ANSWER 后到 | 补设到已有 `_dtls` |
+| ⑥ 路径 B | 收到不同的 answer SDP | 销毁重建 |
+| ⑦ 路径 C | ANSWER 正常先到 | `_setup_dtls` 一把配好 |
+
+**`SetPeerCertificateDigest` 的作用**：告诉 OpenSSL"对端的证书指纹应该是这个值"。它是一个**被动设置**——只是存了一个期望值。真正的验证发生在 DTLS 握手收到对端 Certificate 报文时：OpenSSL 计算 `SHA-256(收到的证书)`，和 `SetPeerCertificateDigest` 存的期望值比对，不匹配则握手失败。
 
 ---
 
