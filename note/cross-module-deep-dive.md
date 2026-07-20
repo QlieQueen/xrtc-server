@@ -1806,6 +1806,7 @@ sequenceDiagram
 
     Note over DTLS: ANSWER(fingerprint) + ICE writable 就绪
     DTLS->>DTLS: _maybe_start_dtls() → StartSSL → k_connecting
+    DTLS->>SSL: _handle_dtls_packet(_catched_client_hello) ★ 重放缓存的 ClientHello
 
     SSL->>DTLS: BIO Write: ServerHello + Certificate + ServerKeyExchange + CertificateRequest + ServerHelloDone
     DTLS->>ICE: send_packet
