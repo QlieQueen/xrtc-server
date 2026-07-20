@@ -1605,32 +1605,149 @@ ICE writable 最快也要 `rtt + ANSWER传输时间 + 至少1个ping周期(48ms)
 
 所以 `_on_writable_state(k_new)` 被触发时，`_dtls` 已创建、fingerprint 已设置、`_catched_client_hello` 里几乎一定已经有数据等着被重放。它只负责**最后一脚**——`_maybe_start_dtls()`。
 
-### 7.6 状态机
+### 7.6 两套 `SignalEvent`——核心混淆点，必须区分
+
+DtlsTransport 涉及两个都叫 `SignalEvent` 但**完全独立**的东西。名字相同、机制不同，是理解 DTLS 层的最大障碍。
+
+**第一套：`StreamInterfaceChannel` 的 `SignalEvent`（BIO 内部通信）**
+
+`StreamInterfaceChannel` 继承 `rtc::StreamInterface`，后者有一个成员 `SignalEvent`。它不是虚方法，而是一个 **sigslot 信号**——本质是一个重载了 `operator()` 的函数对象（functor）。调用 `SignalEvent(this, SE_READ, 0)` 即 `operator()(this, SE_READ, 0)`，触发所有已连接的槽。BIO 层通过订阅这个信号被唤醒：
 
 ```
-k_new ──_maybe_start_dtls(), StartSSL──→ k_connecting
-k_connecting ──_on_dtls_event(SE_OPEN)───→ k_connected
-k_connecting ──_on_dtls_handshake_error──→ k_failed
-k_connected ──_on_dtls_event(SE_CLOSE)───→ k_closed (正常关闭)
-k_connected ──_on_dtls_event(SE_CLOSE + error)──→ k_failed (异常关闭)
+_on_read_packet → _handle_dtls_packet
+  → _downward->on_received_packet(data, size)
+    ├─ BufferQueue.WriteBack(data)          // ① 缓存 DTLS 握手包
+    └─ SignalEvent(this, SE_READ, 0)        // ② 发射 sigslot 信号, 唤醒 BIO 层
+         │
+         └─ SSLStreamAdapter 内部 BIO 回调被触发
+              → 唤醒 OpenSSL
+                → OpenSSL 调 StreamInterfaceChannel::Read()
+                  → BufferQueue.ReadFront()  // 取走数据
+```
+
+**这套 SignalEvent 是 BIO 层内部的唤醒机制，DtlsTransport 不处理它。** 调用链完全在 `_handle_dtls_packet` 内部完成。
+
+**第二套：`SSLStreamAdapter` 的 sigslot `SignalEvent`（握手通知）**
+
+`SSLStreamAdapter` 有一个 **sigslot 信号**也叫 `SignalEvent`。DtlsTransport 在 `_setup_dtls()` 里订阅：
+
+```cpp
+_dtls->SignalEvent.connect(this, &DtlsTransport::_on_dtls_event);
+```
+
+```
+OpenSSL 内部状态变化 → SSLStreamAdapter 发射 sigslot SignalEvent
+  → _on_dtls_event(stream, sig, error)
+    ├─ sig & SE_OPEN   → 握手完成 → _set_dtls_state(k_connected) ★
+    ├─ sig & SE_READ   → 有解密后的应用数据 → _dtls->Read() 循环读
+    └─ sig & SE_CLOSE  → 连接关闭 → _set_dtls_state(k_closed/k_failed)
+```
+
+**这套是 DtlsTransport 订阅的，跟 BIO 层那套没关系。**
+
+| | 第一套 | 第二套 |
+|---|--------|--------|
+| 所属类 | `rtc::StreamInterface`（BIO 基类） | `rtc::SSLStreamAdapter`（OpenSSL 引擎） |
+| 机制 | C++ 虚函数回调 | sigslot 信号/槽 |
+| 谁调用 | `StreamInterfaceChannel::on_received_packet()` | `SSLStreamAdapter` 内部 |
+| 谁处理 | BIO 层（OpenSSL 内部） | `DtlsTransport::_on_dtls_event()` |
+| SE_READ 含义 | "BufferQueue 有数据，来 BIO Read" | "OpenSSL 解密了应用数据，来 SSL Read" |
+
+### 7.7 StreamInterfaceChannel：上行（收）与下行（发）
+
+`StreamInterfaceChannel` 解决一个阻抗不匹配问题：**OpenSSL 用同步 BIO（Read/Write 流式接口），ICE 是异步 UDP 包**。
+
+**上行（客户端 → SFU，ICE 收包 → OpenSSL 消费）**：
+
+```
+UDP 网络 → ICE → signal_read_packet → _on_read_packet → _handle_dtls_packet
+  → _downward->on_received_packet(data, size)
+    ├─ BufferQueue.WriteBack(data)           // 缓存
+    └─ StreamInterface::SignalEvent(SE_READ) // 第一套: 唤醒 OpenSSL BIO
+
+OpenSSL BIO 醒来:
+  → StreamInterfaceChannel::Read(buf, len, &read, &err)
+    ├─ 队列空 → return SR_BLOCK         // OpenSSL 暂停, 等下次 SE_READ
+    └─ 队列有数据 → ReadFront → return SR_SUCCESS
+```
+
+**有 BufferQueue 的原因**：ICE 数据异步到达时 OpenSSL 不一定正在等。缓存起来，OpenSSL 的 BIO 轮询到、或被 SE_READ 唤醒后，再从队列取。
+
+**下行（SFU → 客户端，OpenSSL 写 → ICE 发出）**：
+
+```
+OpenSSL 需要发握手响应
+  → BIO Write
+    → StreamInterfaceChannel::Write(data, len, &written, &err)
+      → _channel->send_packet(data, len)  // 直接经 ICE 发出 UDP
+      → *written = len
+      → return SR_SUCCESS
+```
+
+**没有 BufferQueue**——OpenSSL Write 是同步调用，直接发出即可。
+
+**BufferQueue 容量限制**：
+
+```cpp
+_packets(k_max_pending_packets=2, k_max_dtls_packet_len=2048)
+```
+
+最多缓存 2 个 DTLS 包。不是 bug——DTLS 握手包小且低频，2 个足够覆盖。如果积压超过 2，说明 OpenSSL 消费严重滞后，再大也是延迟暴露问题。
+
+**_dtls 与 _downward 的关系**：
+
+```cpp
+// _setup_dtls():
+auto downward = std::make_unique<StreamInterfaceChannel>(_channel);
+_downward = downward.get();                              // 保留裸指针
+_dtls = SSLStreamAdapter::Create(std::move(downward));   // 所有权转移给 _dtls
+```
+
+- `_dtls` **拥有** StreamInterfaceChannel
+- `_downward` 是裸指针，留在 `_handle_dtls_packet` 中用——因为 `on_received_packet()` 是 `StreamInterfaceChannel` 的方法，不在 `rtc::StreamInterface` 接口里，通过 `_dtls` 调不到
+
+### 7.8 状态机：两个驱动力
+
+DtlsTransport 状态变化由**两个独立驱动力**推动：
+
+| 驱动力 | 来源 | 触发事件 |
+|--------|------|---------|
+| `_maybe_start_dtls()` | 由我们自己调 | ICE writable / ANSWER 到达 / ClientHello 到达（最后一个触发） |
+| `_on_dtls_event()` | OpenSSL 通过 sigslot 通知 | 握手完成 / 连接关闭 / 有应用数据 |
+
+```
+k_new ───────────────────────────────────────────────────────────
+  │
+  │ _maybe_start_dtls() + StartSSL 成功
+  ▼
+k_connecting ─────────────────────────────────────────────────────
+  │
+  ├── _on_dtls_event(SE_OPEN)          → k_connected ★
+  └── _on_dtls_handshake_error(error)  → k_failed
+  │
+k_connected ────────────────────────────────────────────────────
+  │
+  ├── _on_dtls_event(SE_CLOSE, error=0)  → k_closed
+  └── _on_dtls_event(SE_CLOSE, error≠0) → k_failed
 ```
 
 终态（`k_failed` / `k_closed`）无恢复机制——进入后只能等上层 STOP 或 k_failed 销毁。
 
-**writable 的生命周期**：k_new 时 mirror ICE writable，k_connected 后由 DTLS 自己管理：
+**writable 的生命周期**：k_new 时透传 ICE writable，k_connected 后由 DTLS 自己管理。`_on_dtls_event(SE_OPEN)` 接管 writable=true，`SE_CLOSE` 接管 writable=false。
 
-```cpp
-// _on_writable_state(k_new)
-→ _set_writable_state(channel->writable())  // 透传 ICE 状态
+### 7.9 _on_read_packet：收包入口分拣
 
-// _on_dtls_event(SE_OPEN)
-→ _set_writable_state(true)                 // DTLS 接管
+ICE 层已经把 STUN 过滤掉，到达此处的包按 DtlsTransport 状态分发：
 
-// _on_dtls_event(SE_CLOSE)
-→ _set_writable_state(false)                // DTLS 断开
-```
-
-**后续待深挖**：StreamInterfaceChannel（OpenSSL↔ICE 的 BIO 桥接）、`_handle_dtls_packet`（DTLS Record 校验与注入）、`_on_dtls_event` SE_READ 的解密循环。
+| 状态 | 包类型 | 行为 |
+|------|--------|------|
+| `k_new` | DTLS ClientHello | 缓存 `_catched_client_hello` + 可能 `_setup_dtls()` |
+| `k_new` | 非 ClientHello | 丢弃（不认识，也不是 RTP，因为还没握手） |
+| `k_connecting` | DTLS Record | `_handle_dtls_packet` → 注入 OpenSSL |
+| `k_connected` | DTLS Record | `_handle_dtls_packet` → 注入 OpenSSL |
+| `k_connected` | RTP/RTCP | `is_rtp_packet()` 校验 → `signal_read_packet` 上交 DtlsSrtpTransport |
+| `k_connected` | 非 DTLS 非 RTP | 丢弃并打警告 |
+| `k_failed` / `k_closed` | 任意 | 忽略 |
 
 ## 8. SDP 字段 → ICE/DTLS 的"最后一公里"
 
