@@ -2637,7 +2637,50 @@ pull_stream->send_rtp(data, len)
 
 PushStream 和 PullStream 是两个完全独立的媒体栈实例，各有一套 ICE/DTLS/SRTP。两者的连接点只在 `RtcStreamManager`——它从 push 端提取 SSRC 注入 pull 端 offer，并在运行时做 RTP/RTCP 应用层转发。
 
-### 13.1 创建流程
+### 13.1 Stream、Track、SSRC 的概念关系
+
+以实际 SFU 发给推流客户端的 SDP offer 为例（推流客户端 answer 中的 SSRC 行结构相同）：
+
+```
+m=audio ...
+a=ssrc:318529680 cname:SW9JZ1cbEsO7ZIyo
+a=ssrc:318529680 msid:stream_id audio_label
+
+m=video ...
+a=ssrc-group:FID 3016580959 2334272334
+a=ssrc:3016580959 cname:SW9JZ1cbEsO7ZIyo
+a=ssrc:3016580959 msid:stream_id video_label
+a=ssrc:2334272334 cname:SW9JZ1cbEsO7ZIyo
+a=ssrc:2334272334 msid:stream_id video_label
+```
+
+**Stream**（`stream_id`）：一个 RTCPeerConnection 上所有 media source 的集合。同一个 stream_id 跨越 audio 和 video 两个 m= section。
+
+**Track**（`audio_label` / `video_label`）：一路独立的媒体轨道。audio_label 是音频 track，video_label 是视频 track。
+
+**SSRC**（32 位无符号整数）：RTP 包头的流标识。一个 Track 至少对应一个 SSRC。若开启 RTX（重传），需要两个 SSRC，用 `ssrc-group:FID` 关联：
+
+```
+Stream "stream_id"
+  ├─ Track "audio_label" (音频, Opus)
+  │     └─ SSRC 318529680
+  │
+  └─ Track "video_label" (视频, H.264)
+        ├─ SSRC 3016580959  (主流, H.264 编码)
+        └─ SSRC 2334272334  (RTX 重传流, FID 指向 3016580959)
+```
+
+**SDP 行对应关系**：
+
+| SDP 行 | 含义 |
+|--------|------|
+| `a=ssrc:N cname:XXX` | SSRC N 的 RTCP CNAME（同一参与者的所有 SSRC 共享同一个 CNAME） |
+| `a=ssrc:N msid:stream track` | SSRC N 属于哪个 Stream 的哪个 Track |
+| `a=ssrc-group:FID M R` | M 是主流 SSRC，R 是重传流 SSRC |
+
+**为什么 PullStream 的 offer 必须透传原始 SSRC**：SFU 不解码，只做 SRTP 解密→重加密。拉流客户端收 RTP 包时包头 SSRC = 3016580959，必须和 SDP offer 里 `a=ssrc:3016580959` 声明的一致，才能把这个 RTP 流匹配到正确的 Track 和解码器。
+
+### 13.2 创建流程
 
 ```
 SignalingWorker::_process_pull()
@@ -2673,7 +2716,7 @@ offer = stream->create_offer();
 _pull_streams[stream_name] = stream;
 ```
 
-### 13.2 PushStream 如何提取 SSRC
+### 13.3 PushStream 如何提取 SSRC
 
 `push_stream.cpp:36-61`——`get_audio_source()` / `get_video_source()` 委托给 `_get_source(mid, source)`：
 
@@ -2697,7 +2740,7 @@ struct StreamParams {
 
 这些数据来自 push 客户端 ANSWER SDP 的 `a=ssrc:` 行解析（`peer_connection.cpp:215-273` 的 `parse_ssrc_info()`）。
 
-### 13.3 PullStream 的 offer 怎么用这些 SSRC
+### 13.4 PullStream 的 offer 怎么用这些 SSRC
 
 ```cpp
 // pull_stream.cpp:22-33
@@ -2727,7 +2770,7 @@ a=ssrc:67890 msid:stream1 video_track
 
 **关键约束**：SFU 不转码，只做 SRTP 解密→重加密。SSRC 是 RTP 包头核心标识，一旦改写，拉流端无法把收到的 RTP 与 SDP 声明的流对应。
 
-### 13.4 PushStream vs PullStream 对比
+### 13.5 PushStream vs PullStream 对比
 
 | 维度 | PushStream | PullStream |
 |------|-----------|-----------|
