@@ -2678,7 +2678,22 @@ Stream "stream_id"
 | `a=ssrc:N msid:stream track` | SSRC N 属于哪个 Stream 的哪个 Track |
 | `a=ssrc-group:FID M R` | M 是主流 SSRC，R 是重传流 SSRC |
 
-**为什么 PullStream 的 offer 必须透传原始 SSRC**：SFU 不解码，只做 SRTP 解密→重加密。拉流客户端收 RTP 包时包头 SSRC = 3016580959，必须和 SDP offer 里 `a=ssrc:3016580959` 声明的一致，才能把这个 RTP 流匹配到正确的 Track 和解码器。
+**为什么 PullStream 的 offer 必须透传原始 SSRC**：SRTP 加密只覆盖 RTP payload，不加密包头。SFU 解密→重加密后，RTP 包头的 SSRC 是推流端原始值，原封不动到达拉流端：
+
+```
+推流客户端发出的 RTP:
+  [RTP Header: SSRC=3016580959, seq=1234][Payload: 加密的 H.264]
+                                                ↑
+                                          SRTP 只加密这部分
+
+SFU: unprotect_rtp (解密 payload) → protect_rtp (用拉流端密钥重加密)
+     → 包头 SSRC 始终是 3016580959, SFU 没动过
+
+拉流客户端收到:
+  [RTP Header: SSRC=3016580959][Payload: 加密]
+```
+
+SFU 不解码、不转码、不改 RTP 包头。SSRC 是推流端定的，经过 SFU 后不变。所以 PullStream 的 offer 必须在 SDP 中声明这个 SSRC——不是"匹配"，是**提前告知**拉流客户端"你将收到 SSRC=3016580959 的包，它对应 video track (H.264)，RTX 流是 2334272334"。客户端才知道把这个 SSRC 的包交给哪个解码器。如果 offer 不声明，客户端收到未知 SSRC → 不知道编码类型 → 丢弃。
 
 ### 13.2 创建流程
 
