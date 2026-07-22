@@ -2532,7 +2532,48 @@ graph TD
 
 ## 12. RTP/RTCP 数据包处理
 
-### 12.1 两级解复用
+### 12.1 RTP 固定头结构（RFC 3550）
+
+RTP 包头固定 12 字节，SRTP 加密只覆盖 payload，包头原封不动：
+
+```
+Byte  0               1               2               3
+      0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7
+     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+     |V=2|P|X|  CC   |M|     PT      |       Sequence Number         |
+     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+     |                           Timestamp                           |
+     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+     |           Synchronization Source (SSRC) Identifier            |
+     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+```
+
+| 字段 | 位置 | 位宽 | 含义 |
+|------|------|------|------|
+| V | byte 0, bit 6-7 | 2 | 版本号，固定为 2 |
+| P | byte 0, bit 5 | 1 | Padding |
+| X | byte 0, bit 4 | 1 | 扩展头标记 |
+| CC | byte 0, bit 0-3 | 4 | CSRC Count |
+| M | byte 1, bit 7 | 1 | Marker，帧边界标记 |
+| PT | byte 1, bit 0-6 | 7 | Payload Type |
+| SeqNum | byte 2-3 | 16 | 序列号，每包 +1，大端序 |
+| Timestamp | byte 4-7 | 32 | 采样时间戳 |
+| SSRC | byte 8-11 | 32 | 同步源标识，大端序 |
+
+代码只读三个字段——SFU 不解码，不需要 Timestamp、PT、Marker：
+
+```cpp
+// 版本号 → byte 0 高 2 位
+bool has_correct_rtp_version(packet) { return (packet[0] >> 6) == 2; }
+
+// 序列号 → byte 2-3, 大端序, 用于丢包检测日志
+uint16_t parse_rtp_sequence_number(packet) { return ReadBigEndian(packet + 2); }
+
+// SSRC → byte 8-11, 大端序, 用于流识别日志
+uint32_t parse_rtp_ssrc(packet) { return ReadBigEndian(packet + 8); }
+```
+
+### 12.2 两级解复用
 
 ```
 UDP 收包 → DtlsTransport (第一级) → DtlsSrtpTransport (第二级)
@@ -2568,7 +2609,7 @@ RtpPacketType infer_rtp_packet_type(ArrayView<const char> packet) {
 
 **PT 区分规则**（RFC 5761）：byte1 的低 7 位在 [64,96) 为 RTCP 保留范围，其余为 RTP。
 
-### 12.2 解密与转发链
+### 12.3 解密与转发链
 
 ```
 DtlsSrtpTransport::_on_read_packet()
@@ -2588,7 +2629,7 @@ DtlsSrtpTransport::_on_read_packet()
 | `_send_session` | 加密发出 | `ssrc_any_outbound`，只允许 `protect_rtp/protect_rtcp` |
 | `_recv_session` | 解密收到 | `ssrc_any_inbound`，只允许 `unprotect_rtp/unprotect_rtcp` |
 
-### 12.3 RtcStreamManager 转发逻辑
+### 12.4 RtcStreamManager 转发逻辑
 
 ```cpp
 // rtc_stream_manager.cpp:193-214
@@ -2615,7 +2656,7 @@ void on_rtcp_packet_received(stream, data, len) {
 
 **RTCP 双向的必要性**：拉流端发 PLI（Picture Loss Indication）请求 I 帧，必须到达推流端；推流端发 SR（Sender Report）让拉流端做音视频同步。
 
-### 12.4 发包路径
+### 12.5 发包路径
 
 ```
 pull_stream->send_rtp(data, len)
