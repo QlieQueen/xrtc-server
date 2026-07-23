@@ -2003,14 +2003,25 @@ _send_session.reset(new SrtpSession());  // ssrc_any_outbound → 只允许 prot
 _recv_session.reset(new SrtpSession());  // ssrc_any_inbound  → 只允许 unprotect
 ```
 
-`set_rtp_params` 首次调用时 `_send_session` 和 `_recv_session` 为空，走 `_create_srtp_session()` + `set_send`/`set_recv` 路径。若 DTLS 断开后重连，则走 `update_send`/`update_recv` 更新密钥：
+`set_rtp_params` 首次调用时 `_send_session` 和 `_recv_session` 为空，走 `_create_srtp_session()` + `set_send`/`set_recv` 路径。若 DTLS 断开后重连，则走 `update_send`/`update_recv` 更新密钥。之后 `is_srtp_active()` = true。方向隔离：`_send_session` 只能加密，`_recv_session` 只能解密。
+
+**双触发幂等设计**：`_maybe_setup_dtls_srtp` 被两个调用者驱动：
+
+| 调用者 | 时机 | 作用 |
+|--------|------|------|
+| `set_dtls_transport` | TransportController 创建 DtlsSrtpTransport 时 | 兜底——万一 DTLS 已经 connected 了?（实际不会命中） |
+| `_on_dtls_state` | DTLS 握手完成, 信号通知 k_connected | 主路径——DTLS 通了就装 SRTP |
+
+内部双检查保证只执行一次：
 
 ```cpp
-_send_session.reset(new SrtpSession());  // ssrc_any_outbound → 只允许 protect
-_recv_session.reset(new SrtpSession());  // ssrc_any_inbound  → 只允许 unprotect
+void _maybe_setup_dtls_srtp() {
+    if (is_srtp_active() || !is_dtls_writable()) return;  // 已装 或 DTLS 不可写 → 跳过
+    _setup_dtls_srtp();
+}
 ```
 
-之后 `is_srtp_active()` = true。方向隔离：`_send_session` 只能加密，`_recv_session` 只能解密。
+`is_srtp_active()` = `_send_session && _recv_session` 都不为空。SRTP 装好后无论哪个调用者再触发都是空操作。DTLS 断开时 `_on_dtls_state` 收到非 k_connected 状态 → `reset_params()` 销毁 session → `is_srtp_active()` 翻回 false，下次 DTLS 重连时重新安装。
 
 **第四幕：工作**
 
@@ -2031,7 +2042,61 @@ set_local_description()     DTLS SE_OPEN          is_srtp_active()=true
   unprotect: 拒绝          unprotect: 拒绝           unprotect: 解密
 ```
 
-### 7.13 libsrtp 全局初始化：引用计数
+### 7.13 `_extract_params`：RFC 5705 密钥导出逐行走读
+
+`_extract_params`（`dtls_srtp_transport.cpp:239-285`）从 DTLS 主密钥中导出 SRTP 的加密/解密密钥。分三步：
+
+**① 确认 crypto suite → 确定 key/salt 长度**：
+
+```cpp
+dtls_transport->get_srtp_crypto_suite(&selected_crypto_suite);
+// DTLS 握手期间通过 SRTP 扩展协商的密码套件, 如 SRTP_AES128_CM_SHA1_80
+
+GetSrtpKeyAndSaltLengths(selected_crypto_suite, &key_len, &salt_len);
+// SRTP_AES128_CM_SHA1_80 → key_len=16 (AES-128-CTR), salt_len=14 (112-bit salt)
+```
+
+**② SSL_export_keying_material —— RFC 5705**：
+
+```cpp
+dtls_buffer = alloc(2 * (key_len + salt_len));  // 2 × (16+14) = 60 字节
+
+dtls_transport->export_keying_material(
+    "EXTRACTOR-dtls_srtp",   // RFC 5764 定义的标签
+    nullptr, 0, false,       // 无 context
+    &dtls_buffer[0], dtls_buffer.size());
+```
+
+`export_keying_material` → `DtlsTransport::export_keying_material` → `_dtls->ExportKeyingMaterial` → OpenSSL `SSL_export_keying_material`。DTLS 握手完成后，双方的主密钥相同，用同一个标签导出相同的密钥材料。
+
+**③ 拆分 buffer — 分配加密/解密方向**：
+
+```
+dtls_buffer (60 字节):
+  [client_write_key: 16B][server_write_key: 16B][client_write_salt: 14B][server_write_salt: 14B]
+   offset=0               offset=16              offset=32                offset=46
+```
+
+```cpp
+memcpy(&client_write_key[0],          &dtls_buffer[0],     key_len);   // [0, 16)
+memcpy(&server_write_key[0],          &dtls_buffer[16],    key_len);   // [16, 32)
+memcpy(&client_write_key[key_len],    &dtls_buffer[32],    salt_len);  // [32, 46)
+memcpy(&server_write_key[key_len],    &dtls_buffer[46],    salt_len);  // [46, 60)
+
+*send_key = server_write_key;  // server_key(16) + server_salt(14) = 30B → SFU 加密发出
+*recv_key = client_write_key;  // client_key(16) + client_salt(14) = 30B → SFU 解密收到
+```
+
+| 密钥 | 构成 | 用途 | SFU 侧操作 |
+|------|------|------|-----------|
+| send_key | server_write_key + server_write_salt | 加密 SFU→客户端 的 RTP/RTCP | `_send_session->set_send` |
+| recv_key | client_write_key + client_write_salt | 解密 客户端→SFU 的 RTP/RTCP | `_recv_session->set_recv` |
+
+**命名反直觉**：SFU 是 DTLS 服务端（`SSL_SERVER`），`server_write_key` 是"服务端写数据的密钥"——即 SFU 发数据的加密密钥。`client_write_key` 是"客户端写数据的密钥"——即客户端发、SFU 收的解密密钥。
+
+**`ZeroOnFreeBuffer`**：析构时 `memset(0)` 清零密钥材料，防止密钥残留内存被 dump。
+
+### 7.14 libsrtp 全局初始化：引用计数
 
 libsrtp 有两级 API：
 
@@ -2055,7 +2120,7 @@ GlobalMutex g_libsrtp_lock;             // 保护计数
 
 **优化方案**：改为单例。进程启动时 `srtp_init()`，进程退出时 `srtp_shutdown()`。每个 SrtpSession 创建时向单例注册指针，`srtp_install_event_handler` 的 thunk 通过单例查表分派事件到对应 session。生命周期跟进程绑定，消除引用计数的并发隐患。待后续评估。
 
-### 7.14 `_do_set_key`：与 libsrtp 引擎的对接口
+### 7.15 `_do_set_key`：与 libsrtp 引擎的对接口
 
 `_do_set_key`（`srtp_session.cpp:253-305`）是 `set_send` / `set_recv` / `update_send` / `update_recv` 的底层实现。它构造一个 `srtp_policy_t`，首次调用走 `srtp_create`，后续 DTLS 重连走 `srtp_update`。
 
@@ -2580,7 +2645,7 @@ UDP 收包 → DtlsTransport (第一级) → DtlsSrtpTransport (第二级)
              DTLS vs 非 DTLS            RTP vs RTCP
 ```
 
-**第一级**——`DtlsTransport::_on_read_packet()`（`dtls_transport.cpp:176-233`）：
+**第一级**——`DtlsTransport::_on_read_packet()`（`dtls_transport.cpp:176-233`）。在 SRTP 解密**之前**执行，RTP header 不加密，version bits 可见：
 
 | 判断 | 条件 | 去向 |
 |------|------|------|
@@ -2588,46 +2653,90 @@ UDP 收包 → DtlsTransport (第一级) → DtlsSrtpTransport (第二级)
 | RTP/RTCP | `len >= 12 && (buf[0] & 0xC0) == 0x80` 且 DTLS 已 connected | `signal_read_packet` 上交 |
 
 - DTLS ContentType: 20=ChangeCipherSpec, 21=Alert, 22=Handshake, 23=ApplicationData
-- RTP version bits (byte0 高 2 位) = 2 (二进制 `10`) —— SRTP 加密后版本位仍可见
+- `(buf[0] & 0xC0) == 0x80` = RTP 版本位 == 2（二进制 `10`）
 
-**第二级**——`DtlsSrtpTransport::_on_read_packet()`（`dtls_srtp_transport.cpp:104-120`）调用 `infer_rtp_packet_type()`：
+**第二级**——`infer_rtp_packet_type()`，在 SRTP **解密之后**执行，此时 byte 1 的 PT 可见。
+
+RTCP 的 PT 完整 8 位取值为 192-223（如 SR=200=0xC8, RR=201, PLI=206）。`& 0x7F` 后变为 64-95。RTP 的 PT 范围为 0-127，`& 0x7F` 后在非 RTCP 保留区。
+
+**为什么是 `& 0x7F`？** Byte 1 的结构：
+
+```
+Byte 1: [bit7=Marker][bit6][bit5][bit4][bit3][bit2][bit1][bit0=PT低]
+         ← RTP 的 M 位 →  ←─── Payload Type (7 bits) ────→
+```
+
+RTP 有 Marker 位（bit7），`& 0x7F` 把它抹掉，取纯 PT 值。RTCP 没有 Marker 位，byte1 的完整 8 位就是 PT。通过 `& 0x7F` 统一到同一尺度下比较——[64,96) 为 RTCP 保留（RFC 5761），其余为 RTP。
+
+**为什么分两层**：SRTP 不加密 RTP/RTCP 头（12 字节明文），PT 实际上第一层也可见。两层分离的原因是**架构分工**——`DtlsTransport` 只管 DTLS 握手 + DTLS vs 非 DTLS 的粗筛（version bits 够用了），精确的 RTP vs RTCP 区分留给 `DtlsSrtpTransport`（SRTP 模块的职责）。各层做各层的事。
+
+**完整分拣 → 转发链路**：
+
+```
+UDP 收包 → IceConnection::on_read_packet
+  ├─ STUN → 直接处理 (CRC32 fingerprint 校验后)
+  └─ 非 STUN → signal_read_packet ↑
+
+    → DtlsTransport::_on_read_packet (第一层: DTLS vs 非 DTLS)
+      k_connecting: DTLS→OpenSSL, 其余丢弃
+      k_connected: DTLS→OpenSSL, RTP/RTCP→signal_read_packet ↑
+
+      → DtlsSrtpTransport::_on_read_packet (第二层: RTP vs RTCP)
+        → infer_rtp_packet_type
+          ├─ k_rtp → unprotect_rtp → signal_rtp_packet_received ↑
+          └─ k_rtcp → unprotect_rtcp → signal_rtcp_packet_received ↑
+
+            → TransportController → PeerConnection → RtcStream → RtcStreamManager
+              RTP:  push → pull (单向)
+              RTCP: push → pull + pull → push (双向)
+```
+
+### 12.3 收包 + 解密
+
+从 ICE 上交到 DtlsSrtpTransport 的收包处理——调用链已经在 §12.2 的完整链路图中展示，这里聚焦解密步。
+
+**入口**（`dtls_srtp_transport.cpp:104-120`）：
 
 ```cpp
-// rtp_utils.cpp: infer_rtp_packet_type()
-RtpPacketType infer_rtp_packet_type(ArrayView<const char> packet) {
-    // ① 先检查 RTP
-    if (is_rtp_packet(packet)) return k_rtp;
-    // ② 再检查 RTCP
-    if (is_rtcp_packet(packet)) return k_rtcp;
-    // ③ 都不是
-    return k_unknown;
+void DtlsSrtpTransport::_on_read_packet(DtlsTransport*, const char* data, size_t len, int64_t ts) {
+    RtpPacketType packet_type = infer_rtp_packet_type(data);
+    if (packet_type == k_unknown) return;
+
+    rtc::CopyOnWriteBuffer packet(data, len);
+    if (packet_type == k_rtcp) _on_rtcp_packet_received(packet, ts);
+    else                        _on_rtp_packet_received(packet, ts);
 }
-
-// is_rtp_packet: len>=12 && version==2 && PT 不在 [64,96)
-// is_rtcp_packet: len>=4 && (buf[1] & 0x7F) 在 [64,96)
 ```
 
-**PT 区分规则**（RFC 5761）：byte1 的低 7 位在 [64,96) 为 RTCP 保留范围，其余为 RTP。
+**RTP 解密**（`_on_rtp_packet_received`，`dtls_srtp_transport.cpp:127-152`）：
 
-### 12.3 解密与转发链
+```cpp
+void _on_rtp_packet_received(CopyOnWriteBuffer packet, int64_t ts) {
+    if (!is_srtp_active()) return;                    // SRTP 未激活 → 丢弃
 
+    char* data = packet.data<char>();
+    int len = packet.size();
+
+    if (!unprotect_rtp(data, len, &len)) {            // 原地解密 (_recv_session)
+        // 每 100 次失败打一次日志, 含 seqnum + ssrc
+        return;
+    }
+
+    packet.SetSize(len);                              // 截掉 auth tag
+    signal_rtp_packet_received(this, &packet, ts);    // 明文 RTP → 上层转发
+}
 ```
-DtlsSrtpTransport::_on_read_packet()
-  ├─ k_rtp → _on_rtp_packet_received()
-  │           ├─ unprotect_rtp() 原地解密，剥离尾部 auth tag
-  │           └─ signal_rtp_packet_received → TransportController → PeerConnection
-  │
-  └─ k_rtcp → _on_rtcp_packet_received()
-               ├─ unprotect_rtcp() 原地解密，剥离 SRTCP index + auth tag
-               └─ signal_rtcp_packet_received → TransportController → PeerConnection
-```
 
-`SrtpSession` 方向隔离（`srtp_transport.cpp`）：
+`unprotect_rtp` 委托给 `_recv_session->unprotect_rtp`。解密后 `len` 变小（auth tag 被剥离），`SetSize(len)` 截短 buffer。若解密失败（auth tag 校验不通过）→ 丢弃，每 100 次打一次日志防 flooding。
 
-| Session | 职责 | libsrtp 方向 |
-|---------|------|-------------|
-| `_send_session` | 加密发出 | `ssrc_any_outbound`，只允许 `protect_rtp/protect_rtcp` |
-| `_recv_session` | 解密收到 | `ssrc_any_inbound`，只允许 `unprotect_rtp/unprotect_rtcp` |
+**RTCP 解密**结构相同，差异在于 `unprotect_rtcp` 额外处理 4 字节 SRTCP index。
+
+**方向隔离**：
+
+| Session | 方向 | libsrtp 策略 | 允许的操作 |
+|---------|------|-------------|-----------|
+| `_send_session` | 加密发出 | `ssrc_any_outbound` | 仅 `protect_rtp/protect_rtcp` |
+| `_recv_session` | 解密收到 | `ssrc_any_inbound` | 仅 `unprotect_rtp/unprotect_rtcp` |
 
 ### 12.4 RtcStreamManager 转发逻辑
 
@@ -2640,36 +2749,67 @@ void on_rtp_packet_received(stream, data, len) {
         PullStream* pull = _find_pull_stream(stream->stream_name());
         if (pull) pull->send_rtp(data, len);
     }
+    // pull 端不会产生 RTP (它是 sendonly), 忽略
 }
 
 // RTCP: 双向
 void on_rtcp_packet_received(stream, data, len) {
     if (k_push == stream->type()) {
         PullStream* pull = _find_pull_stream(stream->stream_name());
-        if (pull) pull->send_rtcp(data, len);    // push 的 RR/PLI → pull
+        if (pull) pull->send_rtcp(data, len);         // push → pull: SR/RR/PLI
     } else if (k_pull == stream->type()) {
         PushStream* push = _find_push_stream(stream->stream_name());
-        if (push) push->send_rtcp(data, len);    // pull 的 PLI → push (请求 I 帧)
+        if (push) push->send_rtcp(data, len);         // pull → push: PLI/NACK
     }
 }
 ```
 
-**RTCP 双向的必要性**：拉流端发 PLI（Picture Loss Indication）请求 I 帧，必须到达推流端；推流端发 SR（Sender Report）让拉流端做音视频同步。
+**RTP 单向**：推流端是 `recvonly`，只有推流端的 RTP 到达时才转发给拉流端。拉流端是 `sendonly`，不产生 RTP。
 
-### 12.5 发包路径
+**RTCP 双向**：推流端发 SR（Sender Report）让拉流端做音视频同步；拉流端发 PLI（Picture Loss Indication）请求 I 帧、NACK 请求重传，必须到达推流端。
+
+### 12.5 发包路径：加密 → ICE 发出
+
+```cpp
+// dtls_srtp_transport.cpp:42-69
+int send_rtp(const char* data, size_t len) {
+    if (!is_srtp_active()) return -1;
+
+    // ① 查 auth_tag_len → 扩容 buffer
+    int rtp_auth_tag_len = 0;
+    get_send_auth_tag_len(&rtp_auth_tag_len, nullptr);
+    CopyOnWriteBuffer packet(data, len, len + rtp_auth_tag_len);  // capacity = len + 10
+
+    // ② 原地加密 → encrypt payload + 追加 auth tag
+    char* buf = (char*)packet.data();
+    int size = packet.size();
+    protect_rtp(buf, size, packet.capacity(), &size);   // size 变为 len + 10
+
+    packet.SetSize(size);
+
+    // ③ 加密后经 ICE 发出 (绕过 DTLS, 已由 SRTP 加密)
+    return _rtp_dtls_transport->send_packet((const char*)packet.cdata(), packet.size());
+}
+```
+
+**RTCP 加密**（`send_rtcp`）逻辑相同，差异是扩容时额外 4 字节留给 SRTCP index。
+
+**绕过 DTLS**：`_rtp_dtls_transport->send_packet()` = `DtlsTransport::send_packet()` = `_channel->send_packet()`。DTLS 只加密握手消息，应用数据由 SRTP 加密后直接经 ICE 发出。这是 RFC 5764 的设计——DTLS 握手 → 密钥导出 → SRTP 接管应用数据。
+
+**完整发包链**：
 
 ```
-pull_stream->send_rtp(data, len)
-  → PeerConnection::send_rtp()                   // hardcoded mid="audio"
-    → TransportController::send_rtp("audio", ...)
-      → DtlsSrtpTransport::send_rtp()
-        ├─ get_send_auth_tag_len() 预留 auth tag
-        ├─ protect_rtp() SRTP 加密
-        └─ _rtp_dtls_transport->send_packet()
-            → DtlsTransport::send_packet()       // 直接走 ICE，不经过 DTLS 加密
-              → IceTransportChannel::send_packet()
-                → _selected_connection->send_packet()
-                  → UDPPort::send_to() → UDP socket
+RtcStreamManager::on_rtp_packet_received
+  → pull_stream->send_rtp()
+    → PeerConnection::send_rtp()                // hardcoded mid="audio" (BUNDLE)
+      → TransportController::send_rtp()
+        → DtlsSrtpTransport::send_rtp()
+          ├─ protect_rtp (_send_session, 加密)
+          └─ _rtp_dtls_transport->send_packet()
+              → DtlsTransport::send_packet()     // 直接走 ICE
+                → IceTransportChannel::send_packet()
+                  → _selected_connection->send_packet()
+                    → UDPPort::send_to() → UDP socket
 ```
 
 ---
@@ -2695,7 +2835,18 @@ a=ssrc:2334272334 cname:SW9JZ1cbEsO7ZIyo
 a=ssrc:2334272334 msid:stream_id video_label
 ```
 
-**Stream**（`stream_id`）：一个 RTCPeerConnection 上所有 media source 的集合。同一个 stream_id 跨越 audio 和 video 两个 m= section。
+**Stream**（`stream_id`）：一个 RTCPeerConnection 上所有需要同步播放的 media source 的集合。同一个 stream_id 出现在 audio 和 video 两个 m= section 中——拉流端据此知道音频 SSRC 和视频 SSRC 属于同一路流，需要做唇音同步。
+
+如果推流端同时推摄像头 + 桌面共享两路视频，SDP 里会有两个不同的 stream_id，各自独立播放：
+
+```
+m=audio ... a=ssrc:100 msid:streamA audio_track   ← streamA 的音频
+m=video ... a=ssrc:200 msid:streamA video_track   ← streamA 的视频, 同 stream, 需同步
+
+m=video ... a=ssrc:300 msid:streamB screen_track  ← streamB, 桌面共享, 独立
+```
+
+流 A 的 audio + video 需要同步，流 B 独立播放，跟流 A 互不干扰。
 
 **Track**（`audio_label` / `video_label`）：一路独立的媒体轨道。audio_label 是音频 track，video_label 是视频 track。
 
@@ -2715,8 +2866,10 @@ Stream "stream_id"
 
 | SDP 行 | 含义 |
 |--------|------|
-| `a=ssrc:N cname:XXX` | SSRC N 的 RTCP CNAME（同一参与者的所有 SSRC 共享同一个 CNAME） |
-| `a=ssrc:N msid:stream track` | SSRC N 属于哪个 Stream 的哪个 Track |
+| `a=ssrc:N cname:XXX` | SSRC N 的 CNAME——实际做音视频同步的锚点（见下） |
+| `a=ssrc:N msid:stream track` | SSRC N 属于哪个 Stream 的哪个 Track（建连时的映射关系） |
+
+**CNAME 的作用**：SSRC 可能因碰撞而变（RFC 3550 规定冲突时换号），CNAME 在会话生命周期内不变。RTCP 的 SDES 包里携带 CNAME + NTP 时间戳，拉流端据此关联"这些不同 SSRC 实际来自同一个时钟源"，做唇音同步。**MSID 管"这些 SSRC 属于同一路流"，CNAME 管"这些流来自同一个人且能同步"。**
 | `a=ssrc-group:FID M R` | M 是主流 SSRC，R 是重传流 SSRC |
 
 **为什么 PullStream 的 offer 必须透传原始 SSRC**：SRTP 加密只覆盖 RTP payload，不加密包头。SFU 解密→重加密后，RTP 包头的 SSRC 是推流端原始值，原封不动到达拉流端：
@@ -2841,15 +2994,19 @@ a=ssrc:67890 msid:stream1 video_track
 
 ## 14. STOP 与资源清理链
 
-### 5.13 两个清理入口
-| 入口 | 触发条件 | 调用栈 |
-|------|---------|--------|
-| `on_connection_state(k_failed)` | ICE/DTLS 状态机检测到失败 | 在 ICE ping timer 回调栈内 |
-| `on_stream_exception()` | 30 秒 ICE 超时定时器触发 | 独立 timer 回调，不在 ping 栈内 |
+### 14.1 三条清理路径，一个收敛点
 
-两者都会调用 `_remove_push_stream(stream)` / `_remove_pull_stream(stream)`，收敛到同一个 `delete` 路径。
+一个 RtcStream 可以通过三条路径被销毁，最终都收敛到 `_remove_push_stream` / `_remove_pull_stream`：
 
-### 5.14 UID 校验 + delete
+| 路径 | 入口 | 触发条件 | 调用链 | 响应 | UID 校验 |
+|------|------|---------|--------|------|---------|
+| ① 主动停止 | `stop_push/stop_pull` | 客户端发 STOP_PUSH / STOP_PULL | SignalingWorker → RtcServer → RtcWorker → RtcStreamManager | JSON `{errno:0}` | 外部传入 |
+| ② ICE 失败 | `on_connection_state(k_failed)` | 所有 connection TIMEOUT → k_failed | ICE ping timer 回调栈内，信号上报 | 无响应 | stream 对象取 |
+| ③ 兜底超时 | `on_stream_exception()` | 30s 内 PC 没到 k_connected | `ice_timeout_cb` 独立 timer | 无响应 | stream 对象取 |
+
+**路径②和③的互斥**：`RtcStream::_on_connection_state` 在 `k_failed` 时同步删除 30s 定时器（`rtc_stream.cpp:32-36`），防止路径②触发后路径③二次触发。反方向：路径③先触发时会 delete stream，析构链中 `~RtcStream` 也会删定时器，路径②不会再来。
+
+### 14.2 UID 校验 + delete
 ```cpp
 void RtcStreamManager::_remove_push_stream(uint64_t uid, const string& stream_name) {
     PushStream* push_stream = _find_push_stream(stream_name);
@@ -2860,7 +3017,7 @@ void RtcStreamManager::_remove_push_stream(uint64_t uid, const string& stream_na
 }
 ```
 
-### 5.15 析构瀑布
+### 14.3 析构瀑布
 `delete push_stream` 触发的完整析构路径：
 
 ```
@@ -2906,7 +3063,7 @@ destroy_timer_cb():
   └─ _ice_controller.reset()                         // unique_ptr 销毁
 ```
 
-### 5.16 为什么需要 10ms 延迟析构
+### 14.4 为什么需要 10ms 延迟析构
 ```
 ICE ping timer (48ms) → _on_check_and_ping()
   → _update_connection_states()
@@ -2929,15 +3086,6 @@ ICE ping timer (48ms) → _on_check_and_ping()
 ```
 
 **10ms**：足够当前 event loop 迭代完成并返回 libev，但人眼无感知。`~PeerConnection()` 设为 private + `destroy_timer_cb` 为 friend，编译期强制走延迟析构路径。
-
-### 5.17 STOP 命令 vs 异常清理对比
-| 维度 | STOP_PUSH / STOP_PULL | on_connection_state(k_failed) | on_stream_exception |
-|------|----------------------|------------------------------|-------------------|
-| 触发 | 客户端主动发 STOP | ICE 连接全断 | 30s 超时 |
-| 调用链 | SignalingWorker → RtcServer → RtcWorker | ICE ping timer 回调栈内 | 独立 timer |
-| 响应 | 返回 JSON `{errno:0}` | 无响应 | 无响应 |
-| UID 校验 | 有（外部传入） | 有（从 stream 对象取） | 有（从 stream 对象取） |
-| 收敛点 | `_remove_push/pull_stream(uid, name)` | `_remove_push/pull_stream(stream)` | `_remove_push/pull_stream(stream)` |
 
 ---
 
