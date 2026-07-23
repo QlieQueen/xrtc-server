@@ -333,9 +333,9 @@ IceConnection* UDPPort::create_connection(const Candidate& remote_candidate) {
         RTC_LOG(LS_WARNING) << to_string() << "create ice connection on "
             << "an existing remote address, addr: "
             << conn->remote_candidate().address.ToString();
+        IceConnection* old_conn = ret.first->second;
+        old_conn->destroy();
         ret.first->second = conn;
-        
-        //todo
     }
 
     return conn;
