@@ -750,7 +750,7 @@ if (now >= last_ping_sent_ms + ping_interval) {
 }
 ```
 
-`last_ping_sent_ms` 是**整个 channel 共享的**上次 ping 时间——`_ping_connection` 中更新，不管 ping 的是哪个连接。正常运行时这个门形同虚设（定时器周期 = ping_interval，触发时刚好满足）。它在**模式切换瞬间**起作用：
+`last_ping_sent_ms` 是**整个 channel 共享的**上次 ping 时间——`_ping_connection` 中更新，不管 ping 的是哪个连接。稳态下 `now ≈ last_ping + ping_interval`，gate 恒成立。gate 仅在升降档瞬间起作用：。它在**模式切换瞬间**起作用：
 
 ```
 升档 (48ms→480ms): 刚切到 strong, 上次 ping 才过了 48ms
@@ -3361,4 +3361,22 @@ class StreamInterfaceChannel {
 
 两个方向的 `SignalEvent` 含义不同：我们发 `SE_READ` 是"叫 OpenSSL 来读 BufferQueue"，OpenSSL 发 `SE_OPEN` 是"握手完成"、发 `SE_READ` 是"解密数据就绪"。谁点火、谁接收是关键区分。
 
----
+### 16.8 为什么 BUNDLE + RTCP mux 默认开启？有什么影响？
+
+历史原因：老版浏览器不支持、需要独立 ICE channel。现代 WebRTC（2015 年后）强制要求两者开启。当前 xrtc-server 的配置入口只支持 BUNDLE + RTCP mux，不支持关闭。
+
+影响：始终只有 1 个 IceTransportChannel。`IceAgent::_update_state` 的多 channel 聚合逻辑在 BUNDLE + mux 下变成单 channel 透传。非 BUNDLE 场景下 1 音频 + 1 视频需要 4 个 UDP 端口（audio RTP、audio RTCP、video RTP、video RTCP），当前 1 个。
+
+### 16.9 IceTransportChannel 的 writable vs receiving 为什么独立？
+
+writable = selected_connection 是否 writable（"我们→对端"方向）。receiving = 任意连接是否 receiving（"对端→我们"方向）。
+
+两者独立是因为 UDP 链路可以单向通——对端在发数据但我们发不出去，或者我们能发但对端没数据过来。`_weak() = !(writable && receiving)` 要求双向都健康才叫 strong。
+
+### 16.10 SSRC 为什么要透传？不能换一个吗？
+
+SFU 不解码不转码，SRTP 加密只覆盖 payload，RTP 包头的 SSRC 原封不动到达拉流端。如果换了 SSRC，拉流端无法把收到的 RTP 包跟 SDP 声明的 SSRC 匹配，不知道该用 H.264 还是 Opus 解码器 → 丢弃。所以 PullStream 的 offer 必须声明和推流端完全一致的 SSRC。
+
+### 16.11 为什么 ICE 用定时器巡检方式而不是事件驱动方式？
+
+连接状态只会在"收到 ping response"和"定时器到期"两个时机变化。如果没有定时器，一个连接 ping 出去后永远收不到回复，就永远不会被发现已经断了。定时器巡检是**探测超时的唯一手段**——必须主动检查，不能被动等待。
