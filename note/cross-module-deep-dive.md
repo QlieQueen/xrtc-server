@@ -611,7 +611,43 @@ int IceTransportChannel::send_packet(const char* data, size_t len) {
 
 ## 5. ICE ping 定时器 + 两层限速 + 5 级排序
 
-### 5.7 ICE ping 定时器的冷启动条件
+### 5.1 大逻辑：排序 → 切换 → 更新状态
+
+ICE 的核心逻辑线是 `_sort_connections_and_update_state`——每次连接状态变化时执行的三合一操作：
+
+```cpp
+void _sort_connections_and_update_state() {
+    _maybe_switch_selected_connection(_ice_controller->sort_and_switch_connection());
+    // ① 5 级排序 → 可能切换 selected
+
+    _update_state();
+    // ② 更新 writable / receiving / ice_state → 上报 IceAgent → TransportController → PC
+
+    _maybe_start_pinging();
+    // ③ 首次满足条件时启动定时器
+}
+```
+
+**四个触发点**，按实际重要性排序：
+
+| 触发点 | 重要性 | 场景 |
+|--------|--------|------|
+| `_on_connection_state_change` | ★★★ | 定时器巡检发现 connection 降级 / ping 回复触发升级 → 可能切换 selected |
+| `_on_connection_destroyed` | ★★ | 连接销毁，若销毁的是 selected → 必须重新选路 |
+| `_on_unknown_address` | ★ | 新连接创建（初始 write_state=INIT, receiving=false，排序垫底，不影响切换） |
+| `set_remote_ice_params` | ★ | ANSWER 到了补密码，可能解锁首次 ping，但创建连接时同步调了 `_add_connection` 走触发点 3 |
+
+后两个触发点"用处不大"——新连接刚创建时状态全是 INIT，排序必然垫底，不会触发 selected 切换。真正驱动 selected 变化的只有**定时器巡检**（降级）和**ping 回复**（升级）。
+
+**理解这条逻辑链是理解整个 ICE 模块的关键**：先理解"大逻辑"做什么 → 理解"谁触发大逻辑" → 理解"触发源在什么条件下产生"。
+
+
+
+### 5.2 关键常量速查
+
+(速查表见 §5.5.1)
+
+### 5.3 ICE ping 定时器的冷启动条件
 
 `IceTransportChannel` 持有一个周期性定时器（`_ping_watcher`），周期在 48ms/480ms 之间自适应。冷启动的唯一门控是 `_maybe_start_pinging()`（`ice_transport_channel.cpp:414-428`）：
 
@@ -667,7 +703,7 @@ if (remote.username.empty() || remote.password.empty()) {
 
 `_start_pinging` 保证只启动一次。
 
-### 5.8 定时器的三职责 + 两层限速
+### 5.4 定时器的三职责 + 两层限速
 
 `IceTransportChannel` 持有的定时器不止发 ping——它是整个 ICE 状态机的**心跳驱动**。`_on_check_and_ping()`（`ice_transport_channel.cpp:448-465`）每个周期做三件事：
 
@@ -705,6 +741,28 @@ int ping_interval = (_weak() || need_ping_more_at_weak)
 ```
 
 `_weak()` = 没有 selected_connection，或者 selected 不满足 writable && receiving。`need_ping_more_at_weak` = 存在 ping 未满 3 次的连接（新连接快速初探）。
+
+**Channel 级速率门的工作原理**（`select_connection_to_ping` 中）：
+
+```cpp
+if (now >= last_ping_sent_ms + ping_interval) {
+    conn = _find_next_pingable_connection(now);
+}
+```
+
+`last_ping_sent_ms` 是**整个 channel 共享的**上次 ping 时间——`_ping_connection` 中更新，不管 ping 的是哪个连接。正常运行时这个门形同虚设（定时器周期 = ping_interval，触发时刚好满足）。它在**模式切换瞬间**起作用：
+
+```
+升档 (48ms→480ms): 刚切到 strong, 上次 ping 才过了 48ms
+  → gate: now >= last_ping + 480? → No → 不发 → 等 480ms 定时器到期再来 → Yes → 发
+  → 效果: 立即减速，不给刚升级的 channel 额外发 ping
+
+降档 (480ms→48ms): 切到 weak, 紧急
+  → gate: now >= last_ping + 48? → 只要上次 ping 超过 48ms 前 → 立刻放行
+  → 效果: 立即加速，不浪费时间
+```
+
+`-PING_INTERVAL_DIFF(5ms)` 是定时器可能提前触发的容差。
 
 **第二层 — Connection 级**（`ice_controller.cpp:335-347`）：
 
@@ -770,11 +828,10 @@ strong 模式:
 
 **已知问题**：当前采用 Aggressive Nomination——每包 ping 都带 USE-CANDIDATE（`stun_request.cpp:120`），包括轮询探活其他 pair 的 ping。这会导致客户端被探活 ping "误导"切到非 selected 的 pair。正确做法是 Regular Nomination：只有 selected connection 的 ping 才带 USE-CANDIDATE。单网口场景下无实际影响（仅 1 个 IceConnection），多网卡时需修复。代码已标记 TODO。
 
-### 5.13 ICE 5 级排序 + 两层限速：代码级走读
-
+### 5.5 代码级走读
 > 从第一个 UDP 包到达、创建 IceConnection、冷启动定时器，到稳态每周期探活、选连接、排序、升降档的完整代码链路。所有代码位置指向 `src/ice/`。
 
-### 5.1 关键常量速查
+### 5.5.1 关键常量速查
 
 | 常量 | 值 | 定义位置 | 含义 |
 |------|-----|---------|------|
@@ -791,7 +848,7 @@ strong 模式:
 | `WEAK_CONNECTION_RECEIVE_TIMEOUT` | 2500ms | `ice_def.h` | receiving 方向的超时 |
 | `PING_INTERVAL_DIFF` | 5ms | `ice_transport_channel.cpp:13` | 时钟容差，防定时器触发早于精确间隔导致错过周期 |
 
-### 5.2 冷启动：从第一个 UDP 包到定时器启动
+### 5.5.2 冷启动：从第一个 UDP 包到定时器启动
 
 整个 ICE 探活系统的起点不是定时器，而是一个 UDP 包的到达。
 
@@ -900,7 +957,7 @@ set_remote_ice_params
 
 ---
 
-### 5.3 稳态：`_on_check_and_ping` 每周期循环
+### 5.5.3 稳态：`_on_check_and_ping` 每周期循环
 
 定时器启动后，libev 每 `_cur_ping_interval`（初始 48ms）回调 `ice_ping_cb` → `_on_check_and_ping`（`ice_transport_channel.cpp:448`）。五个步骤：
 
@@ -944,7 +1001,7 @@ void IceTransportChannel::_ping_connection(IceConnection* conn) {
 
 ---
 
-### 5.4 第一层限速：Channel 级速率门
+### 5.5.4 第一层限速：Channel 级速率门
 
 `select_connection_to_ping`（`ice_controller.cpp:214`）先定 `ping_interval`，再用它做门控。
 
@@ -998,7 +1055,7 @@ bool _weak() {
 
 ---
 
-### 5.5 第二层限速：Connection 级间隔 + Round-Robin
+### 5.5.5 第二层限速：Connection 级间隔 + Round-Robin
 
 Channel 级放行后，`_find_next_pingable_connection`（`ice_controller.cpp:252`）做连接级选择：
 
@@ -1083,7 +1140,7 @@ bool IceConnection::stable(int64_t now) const {
 
 ---
 
-### 5.6 两层限速完整矩阵
+### 5.5.6 两层限速完整矩阵
 
 ```
                     Channel 级门                          Connection 级门
@@ -1107,7 +1164,7 @@ STRONG (480ms):    每 480ms 最多 1 个 ping                新连接 48ms / �
 
 ---
 
-### 5.7 连接写状态降级：`update_state`
+### 5.5.7 连接写状态降级：`update_state`
 
 `IceConnection::update_state()`（`ice_connection.cpp:244`）是探活的核心，每次 `_on_check_and_ping` 循环第一步就调它。
 
@@ -1165,7 +1222,7 @@ void IceConnection::update_receiving(int64_t now) {
 
 ---
 
-### 5.8 5 级排序算法 + RTT 防抖
+### 5.5.8 5 级排序算法 + RTT 防抖
 
 `sort_and_switch_connection`（`ice_controller.cpp:82`）被 `_sort_connections_and_update_state` 调用——每次连接状态变化时触发，不仅仅是定时器周期。
 
@@ -1223,7 +1280,7 @@ bool IceController::ready_to_send(IceConnection* conn) {
 
 ---
 
-### 5.9 RTT 指数平滑
+### 5.5.9 RTT 指数平滑
 
 `received_ping_response`（`ice_connection.cpp:462`）：
 
@@ -1250,7 +1307,7 @@ void IceConnection::received_ping_response(int rtt) {
 
 ---
 
-### 5.10 write_state 超时 → k_failed → UAF 防护链
+### 5.5.10 write_state 超时 → k_failed → UAF 防护链
 
 当一个连接的 `write_state` 降级到 `STATE_WRITE_TIMEOUT` → `active() = false` → `_compute_ice_transport_state()`（`ice_transport_channel.cpp:324`）检测到"曾经有连接，现在全部 inactive" → 返回 `k_failed`：
 
@@ -1271,7 +1328,7 @@ IceTransportState IceTransportChannel::_compute_ice_transport_state() {
 
 ---
 
-### 5.11 `_sort_connections_and_update_state` 触发点
+### 5.5.11 `_sort_connections_and_update_state` 触发点
 
 `_sort_connections_and_update_state` 捆绑了三件事：sort+switch、`_update_state`、`_maybe_start_pinging`。
 四个触发点全部由事件驱动，但各自依赖的子步骤不同：
@@ -1289,7 +1346,7 @@ IceTransportState IceTransportChannel::_compute_ice_transport_state() {
 
 ---
 
-### 5.12 完整调用链总览
+### 5.5.12 完整调用链总览
 
 ```
                                 ═══ 冷启动 ═══
