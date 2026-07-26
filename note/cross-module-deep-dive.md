@@ -2926,44 +2926,69 @@ UDP 收包 → DtlsTransport (第一级) → DtlsSrtpTransport (第二级)
              DTLS vs 非 DTLS            RTP vs RTCP
 ```
 
-**第一级**——`DtlsTransport::_on_read_packet()`（`dtls_transport.cpp:176-233`）。在 SRTP 解密**之前**执行，RTP header 不加密，version bits 可见：
+解复用分两级，不是因为信息不可见（SRTP 不加密头部），而是因为**架构分工**——`DtlsTransport` 只做 DTLS 握手 + 粗筛，精确区分留给 `DtlsSrtpTransport`。
+
+**第一级**——`DtlsTransport::_on_read_packet()`（`dtls_transport.cpp:176-233`），用 `is_rtp_packet`（`dtls_transport.cpp:56-59`）：
 
 | 判断 | 条件 | 去向 |
 |------|------|------|
 | DTLS | `len >= 13 && buf[0] 在 20..63` | OpenSSL |
 | RTP/RTCP | `len >= 12 && (buf[0] & 0xC0) == 0x80` 且 DTLS 已 connected | `signal_read_packet` 上交 |
 
-- DTLS ContentType: 20=ChangeCipherSpec, 21=Alert, 22=Handshake, 23=ApplicationData
-- `(buf[0] & 0xC0) == 0x80` = RTP 版本位 == 2（二进制 `10`）
+**第一级的 `is_rtp_packet` 不会过滤 RTCP**。它只检查 version bits 和最小长度——而 RTP 和 RTCP 的 version 都是 2：
 
-**第二级**——`infer_rtp_packet_type()`，在 SRTP **解密之后**执行，此时 byte 1 的 PT 可见。
-
-RTCP 的 PT 完整 8 位取值为 192-223（如 SR=200=0xC8, RR=201, PLI=206）。`& 0x7F` 后变为 64-95。RTP 的 PT 范围为 0-127，`& 0x7F` 后在非 RTCP 保留区。
-
-**为什么是 `& 0x7F`？** Byte 1 的结构：
-
-```
-Byte 1: [bit7=Marker][bit6][bit5][bit4][bit3][bit2][bit1][bit0=PT低]
-         ← RTP 的 M 位 →  ←─── Payload Type (7 bits) ────→
+```cpp
+// dtls_transport.cpp:56-59 — 本质是 "非 DTLS 应用数据" 分类器，不是严格的 RTP 检测
+bool is_rtp_packet(const char* buf, size_t len) {
+    const uint8_t* u = reinterpret_cast<const uint8_t*>(buf);
+    return len >= 12 && ((u[0] & 0xC0) == 0x80);  // version==2，RTP/RTCP 都满足
+}
 ```
 
-RTP 有 Marker 位（bit7），`& 0x7F` 把它抹掉，取纯 PT 值。RTCP 没有 Marker 位，byte1 的完整 8 位就是 PT。通过 `& 0x7F` 统一到同一尺度下比较——[64,96) 为 RTCP 保留（RFC 5761），其余为 RTP。
+函数名有误导——实际语义是"是不是 RTP 或 RTCP"。DTLS 握手完成后，所有非 STUN、非 DTLS 的数据包（RTP + RTCP）都在这里放行，丢给上层处理。真正的 RTP vs RTCP 区分在第二级。
 
-**为什么分两层**：SRTP 不加密 RTP/RTCP 头（12 字节明文），PT 实际上第一层也可见。两层分离的原因是**架构分工**——`DtlsTransport` 只管 DTLS 握手 + DTLS vs 非 DTLS 的粗筛（version bits 够用了），精确的 RTP vs RTCP 区分留给 `DtlsSrtpTransport`（SRTP 模块的职责）。各层做各层的事。
+**第二级**——`infer_rtp_packet_type()`（`rtp_utils.cpp:36-46`），SRTP 解密后执行：
+
+```cpp
+bool is_rtp_packet(rtc::ArrayView<const uint8_t> packet) {       // ← 另一个 is_rtp_packet!
+    return packet.size() >= 12 &&
+        has_correct_rtp_version(packet) &&                        // version == 2
+        !payload_type_is_reserved_for_rtcp(packet[1] & 0x7F);    // PT 不在 64~95
+}
+
+bool is_rtcp_packet(rtc::ArrayView<const uint8_t> packet) {
+    return packet.size() >= 4 &&
+        payload_type_is_reserved_for_rtcp(packet[1] & 0x7F);     // PT 在 64~95
+}
+```
+
+**为什么 `& 0x7F` 对 RTP 和 RTCP 都有效？** 两者 byte 1 的结构不同，但恰好能用同一个掩码统一比较：
+
+```
+RTP byte 0-1:   |V=2|P|X|CC|  M|     PT(7bit) 0-127  |
+RTCP byte 0-1:  |V=2|P| RC   |      PT(8bit) 192-223  |
+                              └─ 低 7 位 ─┘ → 64-95
+```
+
+- **RTP**：PT 是 7 位（bit 6-0），bit 7 是 M（Marker）标志位。`& 0x7F` 抹掉 M 位取纯 PT → 0-127。RFC 5761 规定 PT 64-95 保留给 RTCP，RTP 不使用。
+- **RTCP**：PT 是整个 byte（8 位），RFC 3550 规定 RTCP PT 为 192-223。取低 7 位（`& 0x7F`）= 64-95。
+
+所以无论是 RTP 还是 RTCP 包，`byte[1] & 0x7F ∈ [64, 96)` → 一定是 RTCP；不在这个范围 → 一定是 RTP。**一个判断、同一掩码、适配两种头部格式**——这是 RFC 5761 刻意设计的。
 
 **完整分拣 → 转发链路**：
 
 ```
 UDP 收包 → IceConnection::on_read_packet
-  ├─ STUN → 直接处理 (CRC32 fingerprint 校验后)
+  ├─ STUN → 直接处理
   └─ 非 STUN → signal_read_packet ↑
 
     → DtlsTransport::_on_read_packet (第一层: DTLS vs 非 DTLS)
+      用 is_rtp_packet (只查 version bits, RTP/RTCP 都放行)
       k_connecting: DTLS→OpenSSL, 其余丢弃
       k_connected: DTLS→OpenSSL, RTP/RTCP→signal_read_packet ↑
 
       → DtlsSrtpTransport::_on_read_packet (第二层: RTP vs RTCP)
-        → infer_rtp_packet_type
+        → infer_rtp_packet_type (用 PT 范围精确区分)
           ├─ k_rtp → unprotect_rtp → signal_rtp_packet_received ↑
           └─ k_rtcp → unprotect_rtcp → signal_rtcp_packet_received ↑
 
