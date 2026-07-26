@@ -10,6 +10,9 @@
 2. [TCP 信令 vs UDP 媒体：同一 libev LT 下的两种 I/O 哲学](#2-TCP-信令-vs-UDP-媒体同一-libev-LT-下的两种-I-O-哲学)
 3. [set_local_description：整个媒体栈的"接生婆"](#3-set_local_description整个媒体栈的"接生婆")
 4. [Candidate Pair → IceConnection：从 UDP 四元组到逻辑通道](#4-Candidate-Pair---IceConnection从-UDP-四元组到逻辑通道)
+    - [4.7 IceConnection 状态分类](#47-IceConnection-状态分类)
+    - [4.8 selected connection 的三道防线：为什么不等到 15 秒切换就已经发生了](#48-selected-connection-的三道防线为什么不等到-15-秒切换就已经发生了)
+    - [4.9 理论最短切换边界：每级决胜所需的最短时间](#49-理论最短切换边界每级决胜所需的最短时间)
 5. [ICE ping 定时器 + 两层限速 + 5 级排序](#5-ICE-ping-定时器-+-两层限速-+-5-级排序)
 6. [ICE 四层状态机](#6-ICE-四层状态机)
 7. [DTLS Transport 深挖](#7-DTLS-Transport-深挖)
@@ -609,6 +612,184 @@ int IceTransportChannel::send_packet(const char* data, size_t len) {
 
 所有 IceConnection 共享同一个物理 socket，但独立的状态决定了：哪个连接被选中发数据、哪个连接已失效需要淘汰。DTLS 握手、SRTP 加解密、RTP 转发最终都通过**那一个** `_selected_connection` 的 `send_packet()` 发出，通过 `on_read_packet()` → `signal_read_packet` 收进来。
 
+### 4.7 IceConnection 状态分类
+
+IceConnection 有 3 个类别的状态，分属不同层级：
+
+```mermaid
+graph TD
+    subgraph 一级["一级状态 — 三个独立的基础数据源"]
+        WS["WriteState<br/>_write_state<br/>'我→对端'方向"]
+        RC["_receiving<br/>bool<br/>'对端→我'方向"]
+        PS["IceCandidatePairState<br/>_state<br/>RFC 5245 nomination"]
+    end
+
+    subgraph 二级["二级状态 — 直接派生函数（语法糖）"]
+        wf["writable()"]
+        af["active()"]
+        rf["receiving()"]
+    end
+
+    subgraph 三级["三级状态 — 复合 / 独立派生"]
+        wk["weak()"]
+        st["stable()"]
+    end
+
+    WS -->|"== STATE_WRITABLE"| wf
+    WS -->|"!= STATE_WRITE_TIMEOUT"| af
+    RC -->|"透传"| rf
+    wf --> wk
+    rf --> wk
+    PS -.- st
+```
+
+**一级状态**：三个互不隶属的独立数据源，各自有独立的更新路径。
+
+| 状态 | 类型 | 值域 | 更新路径 | 语义 |
+|------|------|------|---------|------|
+| `WriteState` | 4 级枚举 | `WRITABLE(0)` / `UNRELIABLE(1)` / `INIT(2)` / `TIMEOUT(3)` | `received_ping_response()` 升级；`update_state()` 降级 | 我→对端是否畅通（ping 回复率） |
+| `_receiving` | bool | `true` / `false` | `update_receiving()`：收包时间窗口 2.5s 内是否有数据 | 对端→我是否还活着 |
+| `IceCandidatePairState` | 4 级枚举 | `WAITING` / `IN_PROGRESS` / `SUCCEEDED` / `FAILED` | `ping()` → IN_PROGRESS；`received_ping_response()` → SUCCEEDED；`fail_and_destroy()` → FAILED | RFC 5245 nomination 流程 |
+
+WriteState 的降级链路（`update_state()`，`ice_connection.cpp:246`）：
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> STATE_WRITE_INIT
+    STATE_WRITE_INIT --> STATE_WRITABLE : received_ping_response()
+    STATE_WRITABLE --> STATE_WRITE_UNRELIABLE : ≥5 ping 无回复 + >5s
+    STATE_WRITE_UNRELIABLE --> STATE_WRITABLE : received_ping_response()
+    STATE_WRITE_UNRELIABLE --> STATE_WRITE_TIMEOUT : >15s 无回复 → fail_and_destroy()
+    STATE_WRITE_INIT --> STATE_WRITE_TIMEOUT : >15s 无回复 → fail_and_destroy()
+    STATE_WRITE_TIMEOUT --> [*]
+```
+
+**二级状态**：纯粹的一级状态语法糖，不引入新信息。
+
+| 函数 | 定义 | 等价表述 |
+|------|------|---------|
+| `writable()` | `_write_state == STATE_WRITABLE` | WriteState 的最健康档位 |
+| `active()` | `_write_state != STATE_WRITE_TIMEOUT` | 还没死（UNRELIABLE / INIT 也算活跃） |
+| `receiving()` | `_receiving` | 直接透传 |
+
+**三级状态**：跨数据源复合或独立计算。
+
+| 函数 | 定义 | 依赖 |
+|------|------|------|
+| `weak()` | `!(writable() && receiving())` | **WriteState + _receiving** — 唯一的读写复合状态 |
+| `stable()` | `_rtt_samples > 4 && !_miss_response(now)` | **RTT 采样数 + 丢包检测** — 完全独立于 WriteState |
+
+**`stable()` 独立于写状态的原因**：它衡量的是 RTT 测量的置信度，而非连接健康度。一个连接可以 `writable()=true` 但 `stable()=false`（ping 回复正常，只是 RTT 采样不足 5 次），也可以 `writable()=false` 但此时 `stable()` 根本不可达（WRITE_UNRELIABLE 时 RTT 采样通常也不足）。
+
+**`weak()` 为什么容易混淆**：它是唯一横跨读写两个方向的判断。`weak()=true` 的触发原因可能完全不同：
+- `writable()=false` → 写方向死了（ping 无回复）
+- `receiving()=false` → 读方向死了（对端停止发包）
+- 两者都 false → 双向失联
+
+而 `weak()` 的消费者（ping 间隔选择、`_is_pingable` 的 interval 跳过）不关心原因，只关心结果——channel 是否处于"需要加速探测"的状态。
+
+**五个布尔函数的对照**：
+
+|  | writable | receiving | active | weak | stable |
+|--|----------|-----------|--------|------|--------|
+| **来源** | WriteState | _receiving | WriteState | 读写复合 | RTT + 丢包 |
+| **含义** | 我→对端通畅 | 对端→我存活 | 连接未死亡 | 双向未全通 | RTT 可靠且无丢包 |
+| **用于** | Controller 选路 | Channel 状态 | — | ping 间隔加速 | ping 间隔从 900→2500ms |
+
+### 4.8 selected connection 的三道防线：为什么不等到 15 秒切换就已经发生了
+
+当 selected connection 开始丢 ping 回复且对端停止发包时，`_compare_connections` 在 15 秒超时前提供了 **三道防线**，每一道在上一道失败后启动，层层放宽切换条件：
+
+```mermaid
+sequenceDiagram
+    participant sel as selected connection
+    participant other as 另一个 connection (writable + receiving)
+    participant ctrl as IceController
+    participant ch as IceTransportChannel
+
+    Note over sel: t=0 — 开始丢 ping 回复，对端停止发包
+
+    rect rgb(240, 248, 255)
+        Note over sel,ch: ═══ 第一道防线：2.5s，读方向失活 ═══
+        sel->>sel: 2.5s 无数据 → update_receiving() → _receiving = false
+        sel->>ch: signal_state_change
+        ch->>ctrl: sort_and_switch_connection()
+        Note over ctrl: level 1 writable: 平局（都 WRITABLE）<br/>level 2 write_state: 平局<br/>level 3 receiving: other(true) > sel(false)
+        ctrl-->>ch: return other ✓ 切换成功
+    end
+
+    rect rgb(255, 250, 240)
+        Note over sel,ch: 2.5s 时没有其他 writable+receiving 的连接 → 进入第二道防线
+        Note over sel,ch: ═══ 第二道防线：5s，写方向降级 ═══
+        sel->>sel: ≥5 连续丢包 + >5s → STATE_WRITE_UNRELIABLE
+        sel->>ch: signal_state_change
+        ch->>ctrl: sort_and_switch_connection()
+        Note over ctrl: level 1 writable: sel(false) < other(true/writable)<br/>条件放宽到 ready_to_send (接受 WRITE_UNRELIABLE)
+        ctrl-->>ch: 有可切连接则切换，否则继续
+    end
+
+    rect rgb(255, 245, 245)
+        Note over sel,ch: 5s 时仍无可用连接 → 进入第三道防线（终点）
+        Note over sel,ch: ═══ 第三道防线：15s，超时确认死亡 ═══
+        sel->>sel: >15s 无回复 → STATE_WRITE_TIMEOUT → fail_and_destroy()
+        sel->>ch: signal_connection_destroy
+        Note over ch: _on_connection_destroyed(selected)<br/>此时 ICE 已无可用连接<br/>→ _compute_ice_transport_state() → k_failed
+    end
+```
+
+**为什么 15 秒 = ICE 已无可用连接？** 这不是推论，是逻辑必然：
+
+1. **第一道防线 2.5s**：`receiving` 失活触发排序。如果存在另一个 `writable()=true && receiving()=true` 的连接，level 3 就能分出胜负——不需要等写状态降级。
+
+2. **第二道防线 5s**：`STATE_WRITE_UNRELIABLE` 降级触发排序。条件放宽到 `ready_to_send()`（接受 WRITE_UNRELIABLE）。如果存在任何一个可发数据的连接，selected 被换掉。
+
+3. **两轮切换都失败**：说明剩余连接要么是 `STATE_WRITE_INIT`（从未 ping 通，`ready_to_send()` 不接受），要么是 `_receiving=false`（读方向也死了），要么连接列表为空。但 15 秒内 round-robin 已经 ping 过每一个剩余连接至少一轮——没一个能升到 WRITABLE，证实它们确实不通。
+
+4. **第三道防线 15s 不是"切换时机"，而是"已经确认无连接可用的终局宣告"**。`_on_connection_destroyed(selected)` 只是对这个既定事实的机械执行——清理引用、设置 `k_failed`，通知上层释放资源。
+
+**换句话说**：15 秒超时走到 `fail_and_destroy`，不是 selected 一个人死了，是整个 ICE 的心跳已经停跳了 15 秒。所有连接都经过了 ping 验证，没有一条能通。
+
+### 4.9 理论最短切换边界：每级决胜所需的最短时间
+
+三道防线的逻辑可以进一步泛化——把 `_compare_connections` 的 5 级比较拆成各自的最短决胜时间：
+
+```mermaid
+gantt
+    title _compare_connections 各级决胜的理论最短时间
+    dateFormat X
+    axisFormat %s
+
+    section Level 4<br/>priority
+    静态值 0s : 0, 1
+
+    section Level 5<br/>RTT fallback
+    1 RTT (≥100ms) : 1, 100
+
+    section Level 3<br/>receiving
+    2.5s (WEAK_CONNECTION_RECEIVE_TIMEOUT) : 1, 2500
+
+    section Level 2<br/>write_state
+    5s (WRITE_UNRELIABLE 降级) : 1, 5000
+
+    section 实际有效边界
+    读失活 / 写降级 : 1, 5000
+```
+
+**推导**：每级成为决胜条件的理论最短时间，就是 "selected 和下一个最优连接在该级及之前所有级都平局，仅在该级分胜负" 所需的最小等待时间。
+
+| 级别 | 比较条件 | 理论最短决胜时间 | 实际上能否成为决胜级 |
+|------|---------|:---:|------|
+| Level 1 | `writable()` | — | **不能** — 只是 level 2 的布尔切面，不独立提供时间边界 |
+| Level 2 | `write_state()` | **5s** | WRITABLE → WRITE_UNRELIABLE 降级，两个非 writable 连接间由 UNRELIABLE vs INIT 分胜负 |
+| Level 3 | `receiving()` | **2.5s** | `WEAK_CONNECTION_RECEIVE_TIMEOUT` 后 `_receiving` 变为 false，与 receiving 的连接分胜负 |
+| Level 4 | `priority()` | **0s** | **静态值**，连接创建即确定，无需等待。同一 local candidate 到两个不同 remote candidate 的 pair priority 几乎不可能相等 |
+| Level 5 | RTT fallback | **1 RTT** | 理论可达，但需要 level 1-4 全部平局——在有 level 4 priority 的场景下几乎不可能 |
+
+**实际有效的切换边界就是 2.5s 和 5s**。RTT 决胜只存在于理论分析——需要两个连接的 writable、write_state、receiving、priority 四个维度完全相同，这在真实部署中几乎不会发生。
+
+**思考方法复现**：把排序条件拆开，问自己"selected 在什么条件下会被这个条件单独击败？那个条件最快什么时候满足？"——最小的那个满足时间就是当前的最优切换边界。
+
 ## 5. ICE ping 定时器 + 两层限速 + 5 级排序
 
 ### 5.1 大逻辑：排序 → 切换 → 更新状态
@@ -982,7 +1163,7 @@ void IceTransportChannel::_on_check_and_ping() {
 
 **① `_update_connection_states`**（`ice_transport_channel.cpp:474`）。遍历所有连接，逐个调 `conn->update_state(now)`。降级逻辑见 §13.7。
 
-**② `select_connection_to_ping`**：核心调度逻辑，见 §13.4 两层限速。
+**② `select_connection_to_ping`**：核心调度逻辑，见 §5.4 两层限速。
 
 **③ `_ping_connection`**（`ice_transport_channel.cpp:488`）：
 
@@ -1147,7 +1328,7 @@ bool IceConnection::stable(int64_t now) const {
                     ────────────                          ─────────────────
                     控制整体发包节奏                       保护单连接不被过度 ping
 
-WEAK (48ms):       每 48ms 最多 1 个 ping                 _is_pingable 不检查间隔，round-robin 选一个直接 ping
+WEAK (48ms):       每 48ms 最多 1 个 ping                 _is_pingable 不检查间隔（跳过 Connection 级限速），但仍通过 _more_pingable 选最 overdue 的连接
 STRONG (480ms):    每 480ms 最多 1 个 ping                新连接 48ms / 不稳定 900ms / 稳定 2500ms
 ```
 
@@ -1157,6 +1338,7 @@ STRONG (480ms):    每 480ms 最多 1 个 ping                新连接 48ms / �
 |------|-----------|--------------|---------|
 | 新连接 + channel weak | 48ms | 跳过（48ms 初探） | ~48ms |
 | 新连接 + channel strong | 480ms | 48ms | 实际受 channel 门限 ~480ms |
+| 不稳定连接 + channel strong | 480ms | 900ms | 实际受 connection 门限 ~900ms |
 | 稳定连接 + channel strong | 480ms | 2500ms | 实际受 connection 门限 ~2500ms |
 | 连接断开 + channel weak | 48ms | 跳过 | 48ms 加速探测，尽快找到新路径 |
 
@@ -1779,44 +1961,64 @@ OpenSSL 内部状态变化 → SSLStreamAdapter 发射 sigslot SignalEvent
 
 `StreamInterfaceChannel` 解决一个阻抗不匹配问题：**OpenSSL 用同步 BIO（Read/Write 流式接口），ICE 是异步 UDP 包**。
 
-**上行（客户端 → SFU，ICE 收包 → OpenSSL 消费）**：
+**收和发的根本不对称——谁是事件的发起者？**
+
+```mermaid
+sequenceDiagram
+    participant UDP as UDP 网络
+    participant ICE as ICE / signal_read_packet
+    participant SIC as StreamInterfaceChannel<br/>（驿站）
+    participant SSL as OpenSSL BIO<br/>（你）
+
+    Note over UDP,SSL: ═══ 上行（收快递）：你不知道包裹什么时候到 ═══
+
+    UDP->>ICE: DTLS 握手包到达（快递到了）
+    ICE->>SIC: _downward->on_received_packet(data)
+    Note over SIC: ① 包裹放到货架上（BufferQueue）<br/>② 发取件短信（SE_READ）
+
+    SIC->>SSL: ⚡ SignalEvent(SE_READ) — "有你的快递，来取一下"
+
+    SSL->>SIC: Read(buf, len) — 你去驿站取件
+    Note over SIC: 从货架上拿下包裹交给 OpenSSL
+
+    Note over UDP,SSL: ═══ 下行（寄快递）：你自己决定什么时候寄 ═══
+
+    SSL->>SIC: Write(data, len) — 你拿快递来驿站寄
+    SIC->>ICE: _channel->send_packet(data, len)
+    ICE->>UDP: 快递发走
+```
+
+**上行（收快递）**：OpenSSL 是你——你不知道 DTLS 握手包（快递）什么时候到。所以驿站需要两样东西：
+
+| 机制 | 比喻 | 作用 |
+|------|------|------|
+| `SE_READ` 信号 | 取件短信 | 包裹到达时通知你"有快递，来取" |
+| `BufferQueue` | 驿站货架 | 你没来取之前，包裹暂存货架上 |
+
+两者缺一不可。没有短信，你永远不知道有快递；没有货架，快递员没法把包裹留下。
 
 ```
-UDP 网络 → ICE → signal_read_packet → _on_read_packet → _handle_dtls_packet
+UDP → ICE → signal_read_packet → _handle_dtls_packet
   → _downward->on_received_packet(data, size)
-    ├─ BufferQueue.WriteBack(data)           // 缓存
-    └─ StreamInterface::SignalEvent(SE_READ) // 第一套: 唤醒 OpenSSL BIO
+    ├─ BufferQueue.WriteBack(data)           // 放到驿站货架
+    └─ StreamInterface::SignalEvent(SE_READ) // 发取件短信
 
-OpenSSL BIO 醒来:
-  → StreamInterfaceChannel::Read(buf, len, &read, &err)
-    ├─ 队列空 → return SR_BLOCK         // OpenSSL 暂停, 等下次 SE_READ
-    └─ 队列有数据 → ReadFront → return SR_SUCCESS
+OpenSSL 收到短信来取:
+  → StreamInterfaceChannel::Read(buf, len, ...)
+    ├─ 货架空 → SR_BLOCK（回家等着，等下次短信）
+    └─ 有包裹 → 取出 → SR_SUCCESS
 ```
 
-**有 BufferQueue 的原因**：ICE 数据异步到达时 OpenSSL 不一定正在等。缓存起来，OpenSSL 的 BIO 轮询到、或被 SE_READ 唤醒后，再从队列取。
-
-**下行（SFU → 客户端，OpenSSL 写 → ICE 发出）**：
+**下行（寄快递）**：你自己决定什么时候寄——拿上包裹去驿站，直接发走。不需要短信，不需要货架。
 
 ```
-OpenSSL 需要发握手响应
-  → BIO Write
-    → StreamInterfaceChannel::Write(data, len, &written, &err)
-      → _channel->send_packet(data, len)  // 直接经 ICE 发出 UDP
-      → *written = len
-      → return SR_SUCCESS
+OpenSSL 想寄握手响应
+  → BIO Write → StreamInterfaceChannel::Write(data, len, ...)
+    → _channel->send_packet(data, len)   // 直接经 ICE → UDP 发走
+    → return SR_SUCCESS
 ```
 
-**没有 BufferQueue**——OpenSSL Write 是同步调用，直接发出即可。
-
-**BufferQueue 容量限制**：
-
-```cpp
-_packets(k_max_pending_packets=2, k_max_dtls_packet_len=2048)
-```
-
-最多缓存 2 个 DTLS 包。不是 bug——DTLS 握手包小且低频，2 个足够覆盖。如果积压超过 2，说明 OpenSSL 消费严重滞后，再大也是延迟暴露问题。
-
-**_dtls 与 _downward 的关系**：
+**连接句柄所有权**：
 
 ```cpp
 // _setup_dtls():
@@ -1825,8 +2027,16 @@ _downward = downward.get();                              // 保留裸指针
 _dtls = SSLStreamAdapter::Create(std::move(downward));   // 所有权转移给 _dtls
 ```
 
-- `_dtls` **拥有** StreamInterfaceChannel
-- `_downward` 是裸指针，留在 `_handle_dtls_packet` 中用——因为 `on_received_packet()` 是 `StreamInterfaceChannel` 的方法，不在 `rtc::StreamInterface` 接口里，通过 `_dtls` 调不到
+- `_dtls` **拥有** StreamInterfaceChannel（通过 `std::unique_ptr`），负责生命周期
+- `_downward` 是裸指针：`on_received_packet()` 是 `StreamInterfaceChannel` 自己的方法，不在 `rtc::StreamInterface` 接口里，无法通过 `_dtls` 调用。收包路径要用它把数据灌进队列
+
+**BufferQueue 容量**：
+
+```cpp
+_packets(k_max_pending_packets=2, k_max_dtls_packet_len=2048)
+```
+
+最多缓存 2 个 DTLS 包。DTLS 握手包小且低频，2 个足够。积压超过 2 说明 OpenSSL 消费严重滞后——加大队列只是延迟暴露问题。
 
 ### 7.8 状态机：两个驱动力
 
@@ -2053,14 +2263,28 @@ memcpy(&server_write_key[key_len],    &dtls_buffer[2*key_len + salt_len], salt_l
 
 **Session 创建 `set_rtp_params`（`srtp_transport.cpp:13-49`）**：
 
-首次调用时 `_send_session` 和 `_recv_session` 为空，走 `_create_srtp_session()` + `set_send`/`set_recv`。若 DTLS 断开后重连则走 `update_send`/`update_recv` 更新密钥：
-
 ```cpp
 _send_session.reset(new SrtpSession());  // ssrc_any_outbound → 只允许 protect
 _recv_session.reset(new SrtpSession());  // ssrc_any_inbound  → 只允许 unprotect
 ```
 
-`set_rtp_params` 首次调用时 `_send_session` 和 `_recv_session` 为空，走 `_create_srtp_session()` + `set_send`/`set_recv` 路径。若 DTLS 断开后重连，则走 `update_send`/`update_recv` 更新密钥。之后 `is_srtp_active()` = true。方向隔离：`_send_session` 只能加密，`_recv_session` 只能解密。
+首次调用 `set_rtp_params` 时 session 为空，`new_session=true` → `set_send`/`set_recv`。注意：即使 DTLS 断开后重连，也是走 `set_send`/`set_recv`，**不是** `update_send`/`update_recv`。原因：
+
+```
+_on_dtls_state(k_disconnected / k_failed)
+  → reset_params()           // _send_session = nullptr, _recv_session = nullptr
+                              // DTLS 重连后:
+_on_dtls_state(k_connected)
+  → _maybe_setup_dtls_srtp()
+    → is_srtp_active() = false (session 已被 reset)
+    → _setup_dtls_srtp() → set_rtp_params(...)
+      → _create_srtp_session() → new_session = true
+      → set_send / set_recv   // ← 重新创建，不是 update
+```
+
+`update_send`/`update_recv` 仅在 session 已存在时被调用——当前实现中该路径不可达（`_maybe_setup_dtls_srtp` 的 `is_srtp_active()` 检查会提前返回）。是预留的密钥更新接口。
+
+方向隔离：`_send_session` 只能加密（ssrc_any_outbound），`_recv_session` 只能解密（ssrc_any_inbound）。
 
 **双触发幂等设计**：`_maybe_setup_dtls_srtp` 被两个调用者驱动：
 
