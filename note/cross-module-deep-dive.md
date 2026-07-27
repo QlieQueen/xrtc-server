@@ -241,7 +241,7 @@ SFU 侧:
   ⑥ OpenSSL: SHA-256(收到的证书) → 和 SetPeerCertificateDigest 的 "XX:YY:ZZ..." 比对 → 匹配 ✓
 ```
 
-**为什么"带外"传递指纹？** 指纹走 HTTPS（信令信道），证书 + 公钥走 UDP（媒体信道）。攻击者即使截获了 DTLS 的 Certificate 报文，也无法伪造证书——因为他不知道 SDP 里的 fingerprint 值，伪造的证书哈希对不上。HTTPS 保护了 fingerprint 的传输安全，fingerprint 保护了 DTLS 证书的真实性。
+**为什么"带外"传递指纹？** 指纹走 HTTPS（信令信道），证书 + 公钥走 UDP（媒体信道）。攻击者即使截获了 DTLS 的 Certificate 报文，也无法伪造证书——因为他不知道 SDP 里的 fingerprint 值，伪造的证书哈希对不上。HTTPS 保护了 fingerprint 的传输安全，fingerprint 保护了 DTLS 证书的真实性。`set_remote_fingerprint` 解析细节见 §8.5。
 
 **关键澄清**：指纹**不能**反推出证书——SHA-256 是单向哈希。`Hash(证书) → 指纹` 可行，`指纹 → 证书` 不可能。但 SHA-256 的碰撞抵抗保证了两份不同证书产生相同指纹的概率可忽略不计，所以**指纹匹配 = 证书唯一确认**。
 
@@ -448,6 +448,80 @@ int UDPPort::create_ice_candidate(Network* network, int min_port, int max_port, 
 ```
 
 **总结**：`set_local_description` 不仅把 candidate 填入 SDP，更创建了绑定在本地网卡上的 UDP socket，并通过 `signal_read_packet` 连接把它变成了后续所有 ICE/DTLS/SRTP 数据的入口。
+
+### 3.5 `SessionDescription::to_string()` — SDP 文本生成走读
+
+`create_offer()` 最后一步把 SDP 对象模型序列化为文本（`session_description.cpp:278-362`）。生成顺序固定：
+
+**① 会话级头部**：
+
+```cpp
+ss << "v=0\r\n";                                    // 协议版本
+ss << "o=- 0 2 IN IP4 127.0.0.0\r\n";              // 会话发起者
+ss << "s=-\r\n";                                     // 会话名（空）
+ss << "t=0 0\r\n";                                   // 起止时间（永不过期）
+```
+
+**② BUNDLE 分组**：
+
+```cpp
+// a=group:BUNDLE audio video
+auto groups = get_group_by_name("BUNDLE");
+if (!groups.empty()) { ss << "a=group:BUNDLE" << "audio" << "video" << "\r\n"; }
+```
+
+**③ 每个 m= section**（audio / video 循环）：
+
+```cpp
+for (auto& content : _contents) {
+    // m=audio 9 UDP/TLS/RTP/SAVPF 111
+    ss << "m=" << content->mid() << " 9 " << k_media_protocol_dtls_savpf << codec_ids << "\r\n";
+    ss << "c=IN IP4 0.0.0.0\r\n";
+    ss << "a=rtcp:9 IN IP4 0.0.0.0\r\n";
+
+    // a=candidate:... （见 §3.4 — gathering_candidate 时填入 _local_desc）
+    build_candidate(content, ss);
+
+    // a=ice-ufrag:xxx / a=ice-pwd:xxx / a=fingerprint:sha-256 xxx / a=setup:actpass
+    auto td = get_transport_info(content->mid());
+    ss << "a=ice-ufrag:" << td->ice_ufrag << "\r\n";
+    ss << "a=ice-pwd:" << td->ice_pwd << "\r\n";
+    ss << "a=fingerprint:" << td->fingerprint_alg << " " << td->GetRfc4572Fingerprint() << "\r\n";
+
+    ss << "a=mid:" << content->mid() << "\r\n";
+    build_rtp_direction(content, ss);         // a=sendonly / a=recvonly
+    if (content->rtcp_mux()) ss << "a=rtcp-mux\r\n";
+    build_rtp_map(content, ss);               // a=rtpmap: / a=rtcp-fb: / a=fmtp:
+    build_ssrc(content, ss);                  // a=ssrc: / a=ssrc-group: （仅 sendonly 时有）
+}
+```
+
+其中 `build_ssrc` 遍历 `content->streams()`（`vector<StreamParams>`），对每个 track 写出 `a=ssrc:N cname:XXX`、`a=ssrc:N msid:stream track`、`a=ssrc-group:FID`（如有 RTX）。PullStream 的 offer 中 SSRC 行即因此而来——`add_audio/video_source` 注入 push 端的 StreamParams 后，序列化时自动写出。
+
+### 3.6 `PeerConnection::set_remote_sdp()` — ANSWER 解析走读
+
+与 `to_string()` 对称的解析入口（`peer_connection.cpp:344-473`），把客户端发来的 SDP answer 文本还原为对象模型。详见 §8.1 SDP 字段提取和 §13.3 SSRC 提取。完整调用链：
+
+```
+set_remote_sdp(sdp_text)
+  ├─ 按 \n 分割 + 去 \r
+  ├─ 逐行解析:
+  │   ├─ a=group:BUNDLE → ContentGroup
+  │   ├─ m=audio/video   → 切换 media_type
+  │   ├─ parse_transport_info(td, line):
+  │   │   ├─ a=ice-ufrag      → td->ice_ufrag
+  │   │   ├─ a=ice-pwd        → td->ice_pwd
+  │   │   └─ a=fingerprint    → td->identity_fingerprint
+  │   ├─ parse_ssrc_info(info, line):
+  │   │   a=ssrc:N cname:XXX  → SsrcInfo
+  │   │   a=ssrc:N msid:S T   → SsrcInfo.stream_id / track_id
+  │   └─ parse_ssrc_group_info(groups, line):
+  │       a=ssrc-group:FID M R → SsrcGroup
+  ├─ create_track_from_ssrc_info(ssrc_info, tracks)  // SsrcInfo → StreamParams
+  ├─ _remote_desc->add_transport_info(audio_td / video_td)
+  └─ _transport_controller->set_remote_description(_remote_desc)
+       → ICE: set_remote_ice_params + DTLS: set_remote_fingerprint （见 §8.2）
+```
 
 ## 4. Candidate Pair → IceConnection：从 UDP 四元组到逻辑通道
 
@@ -738,7 +812,7 @@ sequenceDiagram
     end
 ```
 
-**为什么 15 秒 = ICE 已无可用连接？** 这不是推论，是逻辑必然：
+**为什么 15 秒 = ICE 已无可用连接？**（写状态降级细节见 §5.5.7、速率门见 §5.4）这不是推论，是逻辑必然：
 
 1. **第一道防线 2.5s**：`receiving` 失活触发排序。如果存在另一个 `writable()=true && receiving()=true` 的连接，level 3 就能分出胜负——不需要等写状态降级。
 
@@ -2476,7 +2550,7 @@ CopyOnWriteBuffer packet(data, len, len + rtcp_auth_tag_len + sizeof(uint32_t));
 
 ### 8.1 字段提取
 
-入口 `PeerConnection::set_remote_sdp()`（`src/pc/peer_connection.cpp:344`）：
+入口 `PeerConnection::set_remote_sdp()`（完整走读见 §3.6）：
 
 ```
 "a=ice-ufrag:AbCd"   → TransportDescription::ice_ufrag  = "AbCd"
