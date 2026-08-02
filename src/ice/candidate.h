@@ -19,7 +19,7 @@ public:
     std::string to_string() const;
 
 public:
-    // //a=candidate:1975680953 1 udp 2113937151 120.76.197.143 10028 typ host
+    // //a=candidate:1975680953 1 udp 2113937151 <your_public_ip> 10028 typ host
     std::string foundation;
     IceCandidateComponent component;
     std::string protocol;    // UDP

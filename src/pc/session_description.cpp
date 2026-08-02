@@ -321,7 +321,7 @@ std::string SessionDescription::to_string() {
         ss << "c=IN IP4 0.0.0.0\r\n";
         ss << "a=rtcp:9 IN IP4 0.0.0.0\r\n";
 
-        //a=candidate:1975680953 1 udp 2113937151 120.76.197.143 10028 typ host
+        //a=candidate:1975680953 1 udp 2113937151 <your_public_ip> 10028 typ host
         build_candidate(content, ss);
 
         //a=ice-ufrag:bmOu

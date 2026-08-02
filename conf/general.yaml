@@ -6,7 +6,7 @@ log:
     log_to_stderr: true
 ice:
     netcard: eth0
-    ipv4_addr: 120.76.197.143
+    ipv4_addr: <your_public_ip>
     min_port: 10025
     max_port: 65535
 

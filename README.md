@@ -152,6 +152,8 @@ flowchart TB
 ./build/xrtc-server
 ```
 
+> **部署到云服务器时**：把 `conf/general.yaml` 中 `ice.ipv4_addr` 替换为你的公网 IP（`<your_public_ip>` 占位符），SFU 生成的 SDP candidate 会携带该地址供对端连通。
+
 **端到端演示**需要三方配合：
 
 ```
